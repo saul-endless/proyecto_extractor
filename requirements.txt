@@ -1,0 +1,12 @@
+# Se utiliza para la extracción de texto nativo (PyMuPDF)
+fitz
+PyMuPDF
+
+# Se utiliza para la extracción OCR (PaddleOCR)
+# Es el motor principal segun la documentacion
+paddlepaddle
+paddleocr
+
+# Se utiliza para la validación cruzada (comparación de texto)
+thefuzz
+python-levenshtein

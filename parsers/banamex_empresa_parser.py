@@ -20,16 +20,14 @@ PATRON_TRANSACCIONES = re.compile(
 
 def parsear_datos_generales(paginas_texto):
     """
-    Se extraeran los 8 campos de Datos Generales usando regex especificos
+    Se extraen los 8 campos de Datos Generales usando regex especificos
     para el formato Banamex Empresa.
+    Se recibe lista de paginas como parametro.
     """
-    # Se uniran todas las paginas en un solo texto
     texto_completo = "".join(paginas_texto)
     
-    # Se inicializara el diccionario de datos
     datos = {}
     
-    # Se buscaran los patrones en el texto
     match_nombre = PATRON_NOMBRE_EMPRESA.search(texto_completo)
     match_periodo = PATRON_PERIODO.search(texto_completo)
     match_clabe = PATRON_CLABE.search(texto_completo)
@@ -39,76 +37,60 @@ def parsear_datos_generales(paginas_texto):
     match_saldo_final = PATRON_SALDO_FINAL.search(texto_completo)
     match_saldo_prom = PATRON_SALDO_PROM.search(texto_completo)
     
-    # Se asignaran los valores encontrados
     datos['nombre_empresa'] = match_nombre.group(0) if match_nombre else None
     datos['periodo'] = f"DEL {match_periodo.group(1)} AL {match_periodo.group(2)}" if match_periodo else None
     datos['numero_cuenta_clabe'] = match_clabe.group(1) if match_clabe else None
     
-    # Se limpiaran los montos
     datos['saldo_inicial'] = limpiar_monto(match_saldo_ant.group(1)) if match_saldo_ant else Decimal('0.00')
     datos['total_depositos'] = limpiar_monto(match_depositos.group(2)) if match_depositos else Decimal('0.00')
     datos['total_retiros'] = limpiar_monto(match_retiros.group(2)) if match_retiros else Decimal('0.00')
     datos['saldo_final'] = limpiar_monto(match_saldo_final.group(1)) if match_saldo_final else Decimal('0.00')
     datos['saldo_promedio'] = limpiar_monto(match_saldo_prom.group(1)) if match_saldo_prom else Decimal('0.00')
     
-    # Se retornaran los datos generales
     return datos
 
 def parsear_transacciones(paginas_texto, saldo_inicial):
     """
-    Se extraeran las transacciones (11 campos) de la tabla de operaciones.
-    Este parser usa un regex multilinea para capturar bloques.
+    Se extraen las transacciones (11 campos) de la tabla de operaciones.
+    Se recibe lista de paginas como parametro.
     """
-    # Se uniran todas las paginas en un solo texto
     texto_completo = "".join(paginas_texto)
     
-    # Se inicializara la lista
     transacciones = []
     
-    # Se encontrara el inicio de la tabla
     match_inicio = PATRON_INICIO_TABLA.search(texto_completo)
     if not match_inicio:
         return []
         
-    # Se cortara el texto para empezar desde la tabla
     texto_tabla = texto_completo[match_inicio.end():]
     
-    # Se encontrara el fin de la tabla
-    match_fin = re.search(r"SALDO MINIMO REQUERIDO", texto_tabla)
+    match_fin = re.search(r"Si desea recibir pagos", texto_tabla)
     if match_fin:
         texto_tabla = texto_tabla[:match_fin.start()]
     
-    # Se buscaran todas las coincidencias de transacciones
     matches = PATRON_TRANSACCIONES.finditer(texto_tabla)
     
-    # Se iterara sobre cada match encontrado
     for match in matches:
-        # Se extraerán los grupos del regex
-        fecha = match.group(1).strip()
+        fecha_op = match.group(1).strip()
         concepto = match.group(2).strip()
-        retiro_str = match.group(3)
-        deposito_str = match.group(4)
+        cargo_str = match.group(3)
+        abono_str = match.group(4)
         
-        # Se determinara el monto y la clasificacion
         monto = Decimal('0.00')
         clasificacion = None
         
-        if retiro_str:
-            # Se asignara como Egreso
-            monto = limpiar_monto(retiro_str)
+        if cargo_str:
+            monto = limpiar_monto(cargo_str)
             clasificacion = "Egreso"
-        elif deposito_str:
-            # Se asignara como Ingreso
-            monto = limpiar_monto(deposito_str)
+        elif abono_str:
+            monto = limpiar_monto(abono_str)
             clasificacion = "Ingreso"
         
-        # Se saltaran lineas sin monto (ej. 'SALDO ANTERIOR')
         if clasificacion is None:
             continue
             
-        # Se construira el objeto de transaccion
         transaccion = {
-            "fecha": fecha,
+            "fecha": fecha_op,
             "nombre_transaccion": re.sub(r'\s+', ' ', concepto).strip(),
             "nombre_resumido": "", 
             "tipo_transaccion": "", 
@@ -121,8 +103,6 @@ def parsear_transacciones(paginas_texto, saldo_inicial):
             "sucursal_o_ubicacion": "" 
         }
         
-        # Se agregara la transaccion a la lista
         transacciones.append(transaccion)
         
-    # Se retornara la lista de transacciones
     return transacciones

@@ -1,9 +1,17 @@
-# Se importan las bibliotecas necesarias
+# -*- coding: utf-8 -*-
+"""
+Parser BBVA Empresarial - VERSIÓN CORREGIDA
+Formato: MAESTRA PYME BBVA / VERSATIL NEGOCIOS
+"""
+
 import re
 from decimal import Decimal
 from utils.validators import limpiar_monto
 
-# Se definen los patrones regex para BBVA
+# =============================================================================
+# PATRONES PARA DATOS GENERALES
+# =============================================================================
+
 PATRON_NOMBRE_EMPRESA = re.compile(
     r"^([A-ZÁÉÍÓÚÑ\s]+(?:SA|S\.A\.|DE CV|S\. DE R\.L\.|SC|S\.C\.)[^\n]*)",
     re.MULTILINE | re.IGNORECASE
@@ -44,249 +52,181 @@ PATRON_SALDO_PROMEDIO = re.compile(
     re.IGNORECASE
 )
 
-PATRON_INICIO_MOVIMIENTOS = re.compile(
-    r"Detalle de Movimientos Realizados",
-    re.IGNORECASE
+# =============================================================================
+# PATRONES PARA TRANSACCIONES (FORMATO REAL BBVA)
+# =============================================================================
+
+# CRÍTICO: El monto está al FINAL de la primera línea
+PATRON_TRANSACCION_COMPLETA = re.compile(
+    r"^(\d{2}/[A-Z]{3})\s+(\d{2}/[A-Z]{3})\s+([A-Z]\d{2})\s+(.*?)\s+([\d,]+\.\d{2})$",
+    re.MULTILINE
 )
 
-def _encontrar_pagina_info_financiera(paginas):
-    """
-    Se busca la pagina que contiene Informacion Financiera.
-    """
-    marcadores_requeridos = [
-        "Información Financiera",
-        "MONEDA NACIONAL",
-        "Comportamiento"
-    ]
-    
-    for i, pagina in enumerate(paginas):
-        if all(marcador in pagina for marcador in marcadores_requeridos):
-            return pagina
-    
-    for i, pagina in enumerate(paginas):
-        coincidencias = sum(1 for m in marcadores_requeridos if m in pagina)
-        if coincidencias >= 2:
-            return pagina
-    
-    return None
+# Códigos típicos de EGRESO
+CODIGOS_EGRESO = {
+    'T17', 'N06', 'A15', 'G30', 'S39', 'S40', 'P14',
+    'CI', 'COM', 'CHQ', 'RET', 'CGO'
+}
 
-def _extraer_nombre_empresa_robusto(texto):
-    """
-    Se extrae el nombre de la empresa con multiples estrategias.
-    """
-    patron = re.search(
-        r"^([A-ZÁÉÍÓÚÑ\s]+(?:SA|S\.A\.|DE CV|S\. DE R\.L\.|SC|S\.C\.)[^\n]*)",
-        texto,
-        re.MULTILINE | re.IGNORECASE
-    )
-    if patron:
-        nombre = patron.group(1).strip()
-        if len(nombre) > 5 and 'BBVA' not in nombre.upper():
-            return nombre
-    
-    lineas = texto.split('\n')[:20]
-    for linea in lineas:
-        if any(palabra in linea.upper() for palabra in ['SA DE CV', 'S.A. DE C.V.', 'S. DE R.L.']):
-            if 'BBVA' not in linea.upper() and len(linea.strip()) > 10:
-                return linea.strip()
-    
-    return None
+# Códigos típicos de INGRESO
+CODIGOS_INGRESO = {
+    'T20', 'W02', 'T22', 'Y45', 'DEP', 'ABO', 'TRA'
+}
+
+# =============================================================================
+# FUNCIÓN: PARSEAR DATOS GENERALES
+# =============================================================================
 
 def parsear_datos_generales(paginas_texto):
     """
-    Se extraen los 8 campos de Datos Generales del estado de cuenta BBVA.
-    Se recibe lista de paginas como parametro.
+    Extrae datos generales del estado de cuenta BBVA.
     """
-    datos = {
-        'nombre_empresa': None,
-        'numero_cuenta_clabe': None,
-        'periodo': None,
-        'saldo_inicial': Decimal('0.00'),
-        'saldo_final': Decimal('0.00'),
-        'saldo_promedio': Decimal('0.00'),
-        'total_depositos': Decimal('0.00'),
-        'total_retiros': Decimal('0.00')
-    }
+    texto_completo = "\n".join(paginas_texto)
     
+    # Buscar página de Información Financiera
     pagina_info = _encontrar_pagina_info_financiera(paginas_texto)
-    
     if not pagina_info:
-        print("  > Advertencia: No se encontro la pagina de Informacion Financiera")
-        pagina_info = '\n'.join(paginas_texto)
+        print("  > Advertencia: No se encontró la página de Información Financiera")
+        pagina_info = paginas_texto[0] if paginas_texto else ""
     
-    datos['nombre_empresa'] = _extraer_nombre_empresa_robusto(pagina_info)
-    if not datos['nombre_empresa']:
-        for pagina in paginas_texto:
-            nombre = _extraer_nombre_empresa_robusto(pagina)
-            if nombre:
-                datos['nombre_empresa'] = nombre
-                break
+    datos = {}
     
+    # Extraer nombre
+    nombre = _extraer_nombre_empresa_robusto(texto_completo)
+    datos['nombre_empresa'] = nombre if nombre else "EMPRESA NO DETECTADA"
+    
+    # Extraer periodo
     match_periodo = PATRON_PERIODO.search(pagina_info)
     if match_periodo:
-        fecha_inicio = match_periodo.group(1)
-        fecha_fin = match_periodo.group(2)
-        datos['periodo'] = f"DEL {fecha_inicio} AL {fecha_fin}"
+        datos['periodo'] = f"DEL {match_periodo.group(1)} AL {match_periodo.group(2)}"
+    else:
+        datos['periodo'] = "PERIODO NO DETECTADO"
     
+    # Extraer CLABE
     match_clabe = PATRON_CLABE.search(pagina_info)
-    if match_clabe:
-        datos['numero_cuenta_clabe'] = match_clabe.group(1)
+    datos['numero_cuenta_clabe'] = match_clabe.group(1) if match_clabe else "NO DETECTADO"
     
+    # Extraer montos
     match_saldo_ini = PATRON_SALDO_INICIAL.search(pagina_info)
-    if match_saldo_ini:
-        datos['saldo_inicial'] = limpiar_monto(match_saldo_ini.group(1))
-    
     match_depositos = PATRON_DEPOSITOS.search(pagina_info)
-    if match_depositos:
-        datos['total_depositos'] = limpiar_monto(match_depositos.group(2))
-    
     match_retiros = PATRON_RETIROS.search(pagina_info)
-    if match_retiros:
-        datos['total_retiros'] = limpiar_monto(match_retiros.group(2))
-    
     match_saldo_fin = PATRON_SALDO_FINAL.search(pagina_info)
-    if match_saldo_fin:
-        datos['saldo_final'] = limpiar_monto(match_saldo_fin.group(1))
-    
     match_saldo_prom = PATRON_SALDO_PROMEDIO.search(pagina_info)
-    if match_saldo_prom:
-        datos['saldo_promedio'] = limpiar_monto(match_saldo_prom.group(1))
+    
+    datos['saldo_inicial'] = limpiar_monto(match_saldo_ini.group(1)) if match_saldo_ini else "0"
+    datos['total_depositos'] = limpiar_monto(match_depositos.group(2)) if match_depositos else "0"
+    datos['total_retiros'] = limpiar_monto(match_retiros.group(2)) if match_retiros else "0"
+    datos['saldo_final'] = limpiar_monto(match_saldo_fin.group(1)) if match_saldo_fin else "0"
+    datos['saldo_promedio'] = limpiar_monto(match_saldo_prom.group(1)) if match_saldo_prom else "0"
     
     return datos
 
+# =============================================================================
+# FUNCIÓN: PARSEAR TRANSACCIONES (MÉTODO CORREGIDO)
+# =============================================================================
+
 def parsear_transacciones(paginas_texto, saldo_inicial):
     """
-    Se extraen todas las transacciones del estado de cuenta BBVA.
-    Se recibe lista de paginas como parametro.
+    Extrae transacciones del estado de cuenta BBVA.
+    CORREGIDO para capturar monto en primera línea.
     """
-    texto_movimientos = ""
-    encontrado_inicio = False
+    texto_completo = "\n".join(paginas_texto)
     
-    for pagina in paginas_texto:
-        if PATRON_INICIO_MOVIMIENTOS.search(pagina):
-            match = PATRON_INICIO_MOVIMIENTOS.search(pagina)
-            texto_movimientos += pagina[match.end():]
-            encontrado_inicio = True
-        elif encontrado_inicio:
-            texto_movimientos += '\n' + pagina
-            
-            if 'Total de Movimientos' in pagina:
-                idx = texto_movimientos.find('Total de Movimientos')
-                if idx != -1:
-                    texto_movimientos = texto_movimientos[:idx]
-                break
-    
-    if not encontrado_inicio:
-        print("  > Advertencia: No se encontro el 'Detalle de Movimientos Realizados' en BBVA.")
+    # Buscar inicio de tabla
+    match_inicio = re.search(r"Detalle de Movimientos Realizados", texto_completo, re.IGNORECASE)
+    if not match_inicio:
+        print("  > Advertencia: No se encontró el 'Detalle de Movimientos Realizados' en BBVA.")
         return []
     
-    transacciones = _extraer_transacciones_multilinea(texto_movimientos, saldo_inicial)
+    # Extraer sección de movimientos
+    texto_movimientos = texto_completo[match_inicio.end():]
+    
+    # Buscar fin de tabla
+    match_fin = re.search(r"Total de Movimientos", texto_movimientos, re.IGNORECASE)
+    if match_fin:
+        texto_movimientos = texto_movimientos[:match_fin.start()]
+    
+    transacciones = []
+    
+    # MÉTODO 1: Buscar transacciones completas (primera línea con monto)
+    for match in PATRON_TRANSACCION_COMPLETA.finditer(texto_movimientos):
+        fecha_oper = match.group(1)
+        fecha_liq = match.group(2)
+        codigo = match.group(3)
+        descripcion_base = match.group(4).strip()
+        monto_str = match.group(5)
+        
+        # Limpiar monto
+        monto = limpiar_monto(monto_str)
+        
+        # Buscar líneas adicionales de descripción
+        pos_fin = match.end()
+        lineas_adicionales = []
+        
+        # Leer líneas siguientes que comienzan con espacio
+        lineas = texto_movimientos[pos_fin:].split('\n')
+        for linea in lineas[:10]:  # Máximo 10 líneas adicionales
+            if linea and linea[0] == ' ':
+                lineas_adicionales.append(linea.strip())
+            else:
+                break
+        
+        # Construir descripción completa
+        descripcion_completa = descripcion_base
+        if lineas_adicionales:
+            descripcion_completa += " " + " ".join(lineas_adicionales)
+        
+        descripcion_completa = re.sub(r'\s+', ' ', descripcion_completa).strip()
+        
+        # Determinar clasificación
+        if codigo in CODIGOS_EGRESO:
+            clasificacion = "Egreso"
+        elif codigo in CODIGOS_INGRESO:
+            clasificacion = "Ingreso"
+        else:
+            # Determinar por palabras clave
+            desc_upper = descripcion_completa.upper()
+            if any(palabra in desc_upper for palabra in ['ENVIADO', 'PAGO', 'CARGO', 'COMISION', 'RETIRO']):
+                clasificacion = "Egreso"
+            elif any(palabra in desc_upper for palabra in ['RECIBIDO', 'DEPOSITO', 'ABONO']):
+                clasificacion = "Ingreso"
+            else:
+                # Por defecto, si tiene T17 o N06 = Egreso, si T20 o W02 = Ingreso
+                clasificacion = "Egreso" if codigo.startswith('T17') or codigo.startswith('N') else "Ingreso"
+        
+        # Extraer información adicional
+        referencia = _extraer_referencia(descripcion_completa)
+        cuenta = _extraer_cuenta(descripcion_completa)
+        contraparte = _extraer_contraparte(descripcion_completa)
+        tipo_transaccion = _determinar_tipo_transaccion(codigo, descripcion_completa)
+        metodo_pago = _determinar_metodo_pago(codigo, descripcion_completa)
+        
+        # Crear transacción
+        transaccion = {
+            "fecha": fecha_oper,
+            "nombre_transaccion": descripcion_completa[:200],
+            "nombre_resumido": _generar_nombre_resumido(descripcion_completa),
+            "tipo_transaccion": tipo_transaccion,
+            "clasificacion": clasificacion,
+            "quien_realiza_o_recibe": contraparte,
+            "monto": str(monto),
+            "numero_referencia_folio": referencia,
+            "numero_cuenta_origen_destino": cuenta,
+            "metodo_pago": metodo_pago,
+            "sucursal_o_ubicacion": ""
+        }
+        
+        transacciones.append(transaccion)
     
     print(f"  > Se extrajeron {len(transacciones)} transacciones")
-    
     return transacciones
 
-def _extraer_transacciones_multilinea(texto_movimientos, saldo_inicial):
-    """
-    Se extraen transacciones considerando formato multi-linea.
-    """
-    transacciones = []
-    lineas = texto_movimientos.split('\n')
-    
-    transaccion_actual = None
-    lineas_descripcion = []
-    
-    for linea in lineas:
-        match_inicio = re.match(
-            r'^(\d{2}/[A-Z]{3})\s+(\d{2}/[A-Z]{3})\s+([A-Z]\d{1,2})\s+(.+)',
-            linea
-        )
-        
-        if match_inicio:
-            if transaccion_actual:
-                _procesar_transaccion_completa(
-                    transaccion_actual, 
-                    lineas_descripcion, 
-                    transacciones
-                )
-            
-            transaccion_actual = {
-                'fecha_operacion': match_inicio.group(1),
-                'fecha_liquidacion': match_inicio.group(2),
-                'codigo': match_inicio.group(3),
-                'descripcion_linea1': match_inicio.group(4).strip()
-            }
-            lineas_descripcion = []
-        
-        elif transaccion_actual and linea.strip():
-            lineas_descripcion.append(linea.strip())
-    
-    if transaccion_actual:
-        _procesar_transaccion_completa(
-            transaccion_actual, 
-            lineas_descripcion, 
-            transacciones
-        )
-    
-    return transacciones
-
-def _procesar_transaccion_completa(trans, lineas_extra, lista_trans):
-    """
-    Se procesa una transaccion completa extrayendo todos sus campos.
-    """
-    descripcion_completa = trans['descripcion_linea1'] + ' ' + ' '.join(lineas_extra)
-    
-    cargo = None
-    abono = None
-    
-    for linea in lineas_extra:
-        match_montos = re.search(r'([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})$', linea)
-        if match_montos:
-            cargo_o_abono = limpiar_monto(match_montos.group(1))
-            break
-    
-    match_final = re.search(r'([\d,]+\.\d{2})\s+([\d,]+\.\d{2})$', descripcion_completa)
-    if match_final:
-        descripcion_completa = descripcion_completa[:match_final.start()].strip()
-    
-    if cargo_o_abono and cargo_o_abono > 0:
-        if trans['codigo'] in ['T17', 'N06', 'A15', 'G30', 'S39', 'S40', 'CI', 'COM']:
-            monto = cargo_o_abono
-            clasificacion = "Egreso"
-        else:
-            monto = cargo_o_abono
-            clasificacion = "Ingreso"
-    else:
-        monto = Decimal('0.00')
-        clasificacion = "Desconocido"
-    
-    referencia = _extraer_referencia(descripcion_completa)
-    cuenta_origen_destino = _extraer_cuenta(descripcion_completa)
-    nombre_contraparte = _extraer_nombre_contraparte(descripcion_completa, trans['codigo'])
-    
-    tipo_transaccion = _determinar_tipo_transaccion(trans['codigo'])
-    metodo_pago = _determinar_metodo_pago(trans['codigo'], descripcion_completa)
-    
-    transaccion = {
-        "fecha": trans['fecha_operacion'],
-        "nombre_transaccion": re.sub(r'\s+', ' ', descripcion_completa).strip(),
-        "nombre_resumido": "", 
-        "tipo_transaccion": tipo_transaccion, 
-        "clasificacion": clasificacion,
-        "quien_realiza_o_recibe": nombre_contraparte, 
-        "monto": monto,
-        "numero_referencia_folio": referencia, 
-        "numero_cuenta_origen_destino": cuenta_origen_destino, 
-        "metodo_pago": metodo_pago, 
-        "sucursal_o_ubicacion": "" 
-    }
-    
-    lista_trans.append(transaccion)
+# =============================================================================
+# FUNCIONES AUXILIARES
+# =============================================================================
 
 def _extraer_referencia(descripcion):
-    """
-    Se extrae numero de referencia de la descripcion.
-    """
+    """Extrae número de referencia."""
     match = re.search(r'Ref\.?\s*:?\s*(\w+)', descripcion, re.IGNORECASE)
     if match:
         return match.group(1)
@@ -298,78 +238,103 @@ def _extraer_referencia(descripcion):
     return ""
 
 def _extraer_cuenta(descripcion):
-    """
-    Se extrae numero de cuenta de origen o destino.
-    """
+    """Extrae número de cuenta CLABE."""
     match = re.search(r'\b(\d{18})\b', descripcion)
     if match:
         return match.group(1)
     
-    match = re.search(r'(?:CTA\.?|CUENTA)\s*(?:ORDENANTE|DESTINO)?\s*:?\s*(\d{10,16})', descripcion, re.IGNORECASE)
+    match = re.search(r'\b(\d{10,16})\b', descripcion)
     if match:
         return match.group(1)
     
     return ""
 
-def _extraer_nombre_contraparte(descripcion, codigo):
-    """
-    Se extrae el nombre de quien realiza o recibe el pago.
-    """
-    if codigo in ['T17', 'T20']:
-        match = re.search(r'(?:PAGO\s+(?:RECIBIDO\s+)?(?:DE|POR\s+ORDEN\s+DE)|ENVIADO\s+A?)\s+([A-Z\s]+?)(?:\s+CTA|$)', descripcion, re.IGNORECASE)
+def _extraer_contraparte(descripcion):
+    """Extrae nombre de contraparte."""
+    patrones = [
+        r'(?:ENVIADO|RECIBIDO|PAGO A|DE)\s+([A-ZÁÉÍÓÚÑ\s]{5,}?)(?:\s+Ref|\s+\d|$)',
+        r'([A-ZÁÉÍÓÚÑ\s]{10,}?)(?:\s+Ref|\s+BMRCASH|\s+\d{4,}|$)'
+    ]
+    
+    for patron in patrones:
+        match = re.search(patron, descripcion, re.IGNORECASE)
         if match:
             nombre = match.group(1).strip()
-            nombre = re.sub(r'^(?:BBVA|SANTANDER|BANORTE|HSBC|INBURSA|BANAMEX|AZTECA|STP|BANREGIO)\s*', '', nombre, flags=re.IGNORECASE)
-            return nombre.strip()
-    
-    if codigo == 'W02':
-        match = re.search(r'^(.*?)(?:\s+BMRCASH|\s+Ref\.)', descripcion, re.IGNORECASE)
-        if match:
-            return match.group(1).strip()
-    
-    if codigo == 'N06':
-        match = re.search(r'BNET\s+\d+\s+([A-Z\s]+?)(?:\s+Ref\.)', descripcion, re.IGNORECASE)
-        if match:
-            return match.group(1).strip()
-    
-    if codigo in ['A15', 'G30', 'S39', 'S40']:
-        match = re.search(r'^([A-Z\s\*#]+?)(?:\s+RFC:|$)', descripcion, re.IGNORECASE)
-        if match:
-            return match.group(1).strip()
+            if len(nombre) > 5 and not nombre.isdigit():
+                return nombre[:50]
     
     return ""
 
-def _determinar_tipo_transaccion(codigo):
-    """
-    Se determina el tipo de transaccion basado en el codigo.
-    """
+def _determinar_tipo_transaccion(codigo, descripcion):
+    """Determina el tipo de transacción."""
     tipos = {
-        'T17': 'Transferencia',
-        'T20': 'Transferencia',
-        'W02': 'Deposito',
-        'N06': 'Pago de Tercero',
-        'A15': 'Cargo por Servicio',
-        'G30': 'Recibo',
-        'S39': 'Comision',
-        'S40': 'IVA',
-        'CI': 'Cobro Inmediato',
-        'COM': 'Comision'
+        'T17': 'Transferencia SPEI Enviada',
+        'T20': 'Transferencia SPEI Recibida',
+        'T22': 'SPEI Devuelto',
+        'W02': 'Depósito en Efectivo',
+        'N06': 'Pago a Tercero',
+        'A15': 'Pago con Tarjeta',
+        'G30': 'Recibo de Pago',
+        'S39': 'Servicio Bancario',
+        'S40': 'IVA Comisión',
+        'P14': 'Pago SAT',
+        'Y45': 'Compensación'
     }
-    return tipos.get(codigo, 'Otro')
+    return tipos.get(codigo, 'Operación Bancaria')
 
 def _determinar_metodo_pago(codigo, descripcion):
-    """
-    Se determina el metodo de pago.
-    """
-    if 'SPEI' in descripcion.upper():
-        return 'SPEI'
-    elif codigo in ['T17', 'T20']:
+    """Determina método de pago."""
+    if codigo in ['T17', 'T20', 'T22']:
         return 'SPEI'
     elif codigo == 'W02':
-        return 'Deposito en Efectivo' if 'CASH' in descripcion.upper() else 'Deposito'
-    elif codigo in ['A15']:
-        return 'Tarjeta de Credito'
+        return 'Efectivo'
     elif codigo == 'N06':
-        return 'Banca en Linea'
+        return 'BNET'
+    elif codigo == 'A15':
+        return 'Tarjeta'
+    elif 'BMRCASH' in descripcion.upper():
+        return 'BMR Cash'
     else:
-        return 'Otro'
+        return 'Transferencia'
+
+def _generar_nombre_resumido(descripcion):
+    """Genera nombre resumido."""
+    palabras = descripcion.split()[:5]
+    resumido = ' '.join(palabras)
+    if len(resumido) > 50:
+        resumido = resumido[:47] + '...'
+    return resumido
+
+def _encontrar_pagina_info_financiera(paginas):
+    """Busca página con Información Financiera."""
+    marcadores = [
+        "Información Financiera",
+        "MONEDA NACIONAL",
+        "Comportamiento"
+    ]
+    
+    for pagina in paginas:
+        if all(m in pagina for m in marcadores):
+            return pagina
+    
+    for pagina in paginas:
+        if sum(1 for m in marcadores if m in pagina) >= 2:
+            return pagina
+    
+    return paginas[0] if paginas else ""
+
+def _extraer_nombre_empresa_robusto(texto):
+    """Extrae nombre de empresa."""
+    match = PATRON_NOMBRE_EMPRESA.search(texto)
+    if match:
+        nombre = match.group(1).strip()
+        if len(nombre) > 5 and 'BBVA' not in nombre.upper():
+            return nombre
+    
+    lineas = texto.split('\n')[:20]
+    for linea in lineas:
+        if any(termino in linea.upper() for termino in ['SA DE CV', 'S.A. DE C.V.', 'S. DE R.L.', 'SC']):
+            if 'BBVA' not in linea.upper() and len(linea.strip()) > 10:
+                return linea.strip()
+    
+    return None

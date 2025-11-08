@@ -52,7 +52,7 @@ class BankStatementExtractor:
         print("Inicializando motor OCR (PaddleOCR). Esto puede tomar un momento...")
         # Se inicializara PaddleOCR
         # Se deshabilitara el log para una salida limpia
-        self.ocr_engine = PaddleOCR(use_angle_cls=True, lang='es', use_gpu=self.use_gpu, show_log=False)
+        self.ocr_engine = PaddleOCR(use_textline_orientation=True, lang='es')
         print("Motor OCR listo.")
         
         # Se definira el mapa de parsers

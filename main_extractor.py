@@ -11,7 +11,7 @@ from datetime import datetime
 
 # Se importaran los modulos locales
 # Se asume que los parsers estan en un directorio 'parsers'
-from parsers import banamex_empresa_parser, banamex_personal_parser, bbva_parser, inbursa_parser
+from parsers import banamex_empresa_parser, bbva_parser, inbursa_parser
 from utils import validators
 
 # Se suprimiran las advertencias de PaddleOCR
@@ -21,8 +21,12 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # --- CONFIGURACION DE RUTAS ---
-INPUT_DIR = Path("input")
-OUTPUT_DIR = Path("output")
+# Se define la ruta base del script (donde esta main_extractor.py)
+SCRIPT_DIR = Path(__file__).parent.resolve()
+# Se define la ruta de entrada RELATIVA AL SCRIPT
+INPUT_DIR = SCRIPT_DIR / "input"
+# Se define la ruta de salida RELATIVA AL SCRIPT
+OUTPUT_DIR = SCRIPT_DIR / "output"
 # ------------------------------
 
 class BankStatementExtractor:
@@ -51,71 +55,80 @@ class BankStatementExtractor:
         # Se informara al usuario sobre la inicializacion
         print("Inicializando motor OCR (PaddleOCR). Esto puede tomar un momento...")
         # Se inicializara PaddleOCR
-        # Se deshabilitara el log para una salida limpia
+        # Se han eliminado use_gpu y show_log (obsoletos) y se ha actualizado use_angle_cls
         self.ocr_engine = PaddleOCR(use_textline_orientation=True, lang='es')
         print("Motor OCR listo.")
         
         # Se definira el mapa de parsers
-        # Se registraran los parsers especificos que hemos creado
         self.parsers = {
             "banamex_empresa": banamex_empresa_parser,
-            "banamex_personal": banamex_personal_parser,
             "bbva_empresa": bbva_parser,
             "inbursa_empresa": inbursa_parser
-            # Se agregaran futuros parsers aqui (ej. "banorte_empresa": banorte_parser)
         }
 
     def _extract_text_native(self, pdf_path):
         """
-        Se extraera el texto seleccionable (nativo) del PDF usando PyMuPDF.
+        Se extraera el texto seleccionable (nativo) del PDF pagina por pagina.
+        Se devolvera una lista de strings.
         """
-        # Se inicializara el texto
-        texto_completo = ""
+        # Se inicializara la lista de paginas
+        paginas_texto = []
         try:
             # Se abrira el documento
             doc = fitz.open(pdf_path)
             # Se iterara sobre cada pagina
             for page in doc:
-                # Se extraera el texto
-                texto_completo += page.get_text("text")
+                # Se extraera el texto y se agregara a la lista
+                paginas_texto.append(page.get_text("text"))
             # Se cerrara el documento
             doc.close()
         except Exception as e:
             # Se manejara la excepcion
             print(f"Error en extraccion nativa: {e}")
-        # Se retornara el texto
-        return texto_completo
+        # Se retornara la lista de textos por pagina
+        return paginas_texto
 
     def _extract_text_ocr(self, pdf_path):
         """
-        Se extraera texto usando OCR (PaddleOCR).
-        Esto funciona para PDFs basados en imagenes o texto no seleccionable.
+        Se extraera texto usando OCR pagina por pagina.
+        Se devolvera una lista de strings.
         """
-        # Se inicializara el texto
-        texto_completo = ""
+        # Se inicializara la lista de paginas
+        paginas_texto = []
         try:
             # Se ejecutara el OCR sobre el archivo
-            resultado_ocr = self.ocr_engine.ocr(str(pdf_path), cls=True)
+            # SE HA CORREGIDO EL ERROR: Se elimino el argumento 'cls=True'
+            resultado_ocr = self.ocr_engine.ocr(str(pdf_path))
+            
             # Se iterara sobre los resultados de cada pagina
-            for pagina in resultado_ocr:
-                # Se iterara sobre cada linea detectada
-                if pagina:
-                    for linea in pagina:
-                        # Se agregara el texto de la linea
-                        texto_completo += linea[1][0] + "\n"
+            if resultado_ocr:
+                for pagina_resultado in resultado_ocr:
+                    texto_pagina_actual = ""
+                    if pagina_resultado:
+                        # Se iterara sobre cada linea detectada en la pagina
+                        for linea in pagina_resultado:
+                            # Se agregara el texto de la linea
+                            texto_pagina_actual += linea[1][0] + "\n"
+                    # Se agregara el texto completo de la pagina a la lista
+                    paginas_texto.append(texto_pagina_actual)
         except Exception as e:
             # Se manejara la excepcion
             print(f"Error en extraccion OCR: {e}")
-        # Se retornara el texto
-        return texto_completo
+        # Se retornara la lista de textos por pagina
+        return paginas_texto
 
-    def _detectar_banco_y_producto(self, texto):
+    def _detectar_banco_y_producto(self, paginas_texto):
         """
         Se detectara el banco y el producto basado en palabras clave unicas.
-        Este es el "router" que selecciona el parser correcto.
+        Se usara el texto completo para la deteccion.
         """
+        # Se unira el texto de todas las paginas para la deteccion
+        if not paginas_texto:
+            return "desconocido"
+            
+        texto_completo = "".join(paginas_texto)
         # Se convertira a minusculas
-        texto_lower = texto.lower()
+        texto_lower = texto_completo.lower()
         
         # Se aplicaran reglas de deteccion
         if "bbva" in texto_lower:
@@ -132,33 +145,32 @@ class BankStatementExtractor:
             
         if "banamex" in texto_lower:
             # Se distinguira entre los formatos de Banamex
-            if "micuenta" in texto_lower:
-                return "banamex_personal"
             if "inmovitur" in texto_lower:
                 return "banamex_empresa"
             if "costco banamex" in texto_lower:
-                return "desconocido" # (Parser de Tarjeta de Credito no implementado)
+                return "desconocido" 
             
             # Se usara un default si no se puede especificar
-            return "banamex_personal" 
+            if "banamex_empresa" in self.parsers:
+                 return "banamex_empresa"
             
         # Se retornara desconocido si no hay coincidencias
         return "desconocido"
 
-    def _parsear_texto(self, texto, parser_key):
+    def _parsear_texto(self, paginas_texto, parser_key):
         """
         Se seleccionara el parser correcto desde el mapa y se ejecutara.
+        Se pasara la lista de paginas al parser.
         """
         # Se verificara si el parser existe
         if parser_key in self.parsers:
             # Se obtendra el modulo del parser
             parser = self.parsers[parser_key]
             
-            # Se llamara al "contrato" (la interfaz) que todos los parsers deben tener
             # Se ejecutara el parsing de datos generales
-            datos_generales = parser.parsear_datos_generales(texto)
+            datos_generales = parser.parsear_datos_generales(paginas_texto)
             # Se ejecutara el parsing de transacciones
-            transacciones = parser.parsear_transacciones(texto, datos_generales.get('saldo_inicial', 0))
+            transacciones = parser.parsear_transacciones(paginas_texto, datos_generales.get('saldo_inicial', 0))
             
             # Se retornaran los resultados
             return {"datos_generales": datos_generales, "transacciones": transacciones}
@@ -187,7 +199,7 @@ class BankStatementExtractor:
         periodo_str = periodo_str.strip()
         
         try:
-            # Formato 1: BBVA (DEL 01/08/2025 AL 31/08/2025)
+            # Formato 1: BBVA (DEL 01/04/2025 AL 30/04/2025)
             match1 = re.match(r"DEL (\d{2})/(\d{2})/(\d{4}) AL (\d{2})/(\d{2})/(\d{4})", periodo_str, re.IGNORECASE)
             if match1:
                 f_inicio = datetime.strptime(f"{match1.group(1)}-{match1.group(2)}-{match1.group(3)}", "%d-%m-%Y")
@@ -211,21 +223,13 @@ class BankStatementExtractor:
                 f_inicio = datetime.strptime(f"{match3.group(1)}-{mes_inicio}-{match3.group(3)}", "%d-%b-%Y")
                 f_fin = datetime.strptime(f"{match3.group(4)}-{mes_fin}-{match3.group(6)}", "%d-%b-%Y")
                 return f_inicio.strftime('%d%b%Y').upper(), f_fin.strftime('%d%b%Y').upper()
-                
-            # Formato 4: Banamex Personal (Período del 18 de mayo al 17 de junio del 2025)
-            match4 = re.match(r"Período del (\d{1,2}) de (\w+) al (\d{1,2}) de (\w+) del (\d{4})", periodo_str, re.IGNORECASE)
-            if match4:
-                mes_inicio = self.MONTH_MAP.get(match4.group(2).lower(), 'JAN')
-                mes_fin = self.MONTH_MAP.get(match4.group(4).lower(), 'JAN')
-                f_inicio = datetime.strptime(f"{match4.group(1)}-{mes_inicio}-{match4.group(5)}", "%d-%b-%Y")
-                f_fin = datetime.strptime(f"{match4.group(3)}-{mes_fin}-{match4.group(5)}", "%d-%b-%Y")
-                return f_inicio.strftime('%d%b%Y').upper(), f_fin.strftime('%d%b%Y').upper()
 
         except Exception as e:
             print(f"  > Advertencia: No se pudo formatear el periodo '{periodo_str}'. Error: {e}")
             return "FECHA_INICIO", "FECHA_FIN"
             
         # Se retornaran valores por defecto si ningun formato coincide
+        print(f"  > Advertencia: El formato de periodo '{periodo_str}' no coincide con ningun patron.")
         return "FECHA_INICIO", "FECHA_FIN"
 
     def _formatear_nombre_archivo(self, datos_generales):
@@ -236,7 +240,7 @@ class BankStatementExtractor:
         # Se obtendra el nombre de la empresa, se limpiara y se convertira a mayusculas
         nombre = datos_generales.get('nombre_empresa', 'SIN_NOMBRE')
         if not nombre: nombre = 'SIN_NOMBRE'
-        nombre_limpio = re.sub(r'[^A-Z0-9_\s]', '', nombre.upper())
+        nombre_limpio = re.sub(r'[^A-Z0-9_\s]', '', str(nombre).upper())
         nombre_limpio = re.sub(r'\s+', '_', nombre_limpio.strip())
         
         # Se obtendra el periodo
@@ -304,30 +308,17 @@ class BankStatementExtractor:
         
         # 1. Se ejecutara la extraccion Nativa (Metodo 1)
         print("Paso 1: Ejecutando extraccion Nativa (PyMuPDF)...")
-        texto_nativo = self._extract_text_native(pdf_path)
+        paginas_nativas = self._extract_text_native(pdf_path)
         
         # 2. Se ejecutara la extraccion OCR (Metodo 2)
         print("Paso 2: Ejecutando extraccion OCR (PaddleOCR)...")
-        texto_ocr = self._extract_text_ocr(pdf_path)
+        paginas_ocr = self._extract_text_ocr(pdf_path)
         
-        # Se seleccionara el mejor texto (estrategia: el mas largo)
-        if len(texto_nativo) > 200:
-            texto_final = texto_nativo
-            metodo_usado = "Nativo"
-        else:
-            texto_final = texto_ocr
-            metodo_usado = "OCR"
-            
-        print(f"Paso 2.1: Metodo de extraccion seleccionado: {metodo_usado} ({len(texto_final)} caracteres)")
-
-        if len(texto_final) < 100:
-            # Se informara si no se pudo extraer texto
-            print(f"ERROR: No se pudo extraer texto significativo de {pdf_path.name}.")
-            return
-
+        # --- INICIO DE LA LOGICA DE REINTENTO ---
         # 3. Se detectara el banco y producto
         print("Paso 3: Detectando banco y producto...")
-        parser_key = self._detectar_banco_y_producto(texto_final)
+        # Se usara cualquier texto disponible (nativo u ocr) para la deteccion
+        parser_key = self._detectar_banco_y_producto(paginas_nativas or paginas_ocr)
         print(f"Parser seleccionado: {parser_key.upper()}")
 
         if parser_key == "desconocido":
@@ -335,21 +326,33 @@ class BankStatementExtractor:
             print(f"ERROR: Banco no reconocido en {pdf_path.name}. Se necesita crear un parser.")
             return
 
-        # 4. Se Parseara el texto
-        print(f"Paso 4: Ejecutando parser especifico para '{parser_key}'...")
+        # 4. Se Parseara el texto (Intento 1: Nativo)
+        print(f"Paso 4: Ejecutando parser especifico para '{parser_key}' (Intento 1: Nativo)...")
+        metodo_usado = "Nativo"
         resultado_final = None
         try:
-            # Se obtendran los resultados del parser principal
-            resultado_final = self._parsear_texto(texto_final, parser_key)
-            print("Parsing completado.")
-        except NotImplementedError as e:
-            # Se manejara el error de parser no implementado
-            print(e)
-            return
+            resultado_final = self._parsear_texto(paginas_nativas, parser_key)
         except Exception as e:
-            # Se manejara un error general de parsing
-            print(f"Error critico durante el parsing de {pdf_path.name}: {e}")
+            print(f"  > Error critico durante el parsing Nativo: {e}")
+            resultado_final = None # Se asegura de que el resultado este vacio
+            
+        # 4.1. Se verificara si el parsing nativo fallo y se reintentara con OCR
+        if not resultado_final or not resultado_final.get('datos_generales'):
+            print(f"  > Advertencia: El texto nativo no pudo ser parseado. Reintentando con OCR.")
+            metodo_usado = "OCR"
+            try:
+                resultado_final = self._parsear_texto(paginas_ocr, parser_key)
+            except Exception as e:
+                print(f"  > Error critico durante el parsing OCR: {e}")
+                return # Se rinde si ambos metodos fallan
+
+        # 4.2. Se verificara si ambos metodos fallaron
+        if not resultado_final or not resultado_final.get('datos_generales'):
+            print(f"ERROR: No se pudieron extraer datos ni con metodo Nativo ni con OCR.")
             return
+            
+        print(f"Parsing completado (usando metodo: {metodo_usado}).")
+        # --- FIN DE LA LOGICA DE REINTENTO ---
 
         # 5. Se ejecutara la Validacion de Balance
         print("Paso 5: Ejecutando Validacion de Balance...")
@@ -367,9 +370,9 @@ class BankStatementExtractor:
         print("Paso 6: Ejecutando Validacion Cruzada (Nativo vs OCR)...")
         try:
             # Se parseara el texto nativo
-            resultado_a = self._parsear_texto(texto_nativo, parser_key)
+            resultado_a = self._parsear_texto(paginas_nativas, parser_key)
             # Se parseara el texto ocr
-            resultado_b = self._parsear_texto(texto_ocr, parser_key)
+            resultado_b = self._parsear_texto(paginas_ocr, parser_key)
             # Se ejecutara la validacion
             reporte_cruzado = validators.validar_cruzada(resultado_a, resultado_b)
             # Se agregara el reporte al resultado
@@ -411,7 +414,7 @@ def main():
     pdf_files = list(INPUT_DIR.glob("*.pdf"))
     
     if not pdf_files:
-        print("No se encontraron archivos PDF en la carpeta 'input'.")
+        print(f"No se encontraron archivos PDF en la carpeta '{INPUT_DIR}'.")
         print("Por favor, agregue estados de cuenta en PDF y vuelva a ejecutar el script.")
         return
 

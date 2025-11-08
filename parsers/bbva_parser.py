@@ -4,21 +4,45 @@ from decimal import Decimal
 from utils.validators import limpiar_monto
 
 # --- EXPRESIONES REGULARES (REGEX) ESPECIFICAS PARA BBVA (Maestra Pyme / Versatil) ---
-PATRON_NOMBRE_EMPRESA = re.compile(r"BBVA\n(.*?)\n", re.DOTALL) #
-PATRON_PERIODO = re.compile(r"Periodo\s+DEL (\d{2}/\d{2}/\d{4}) AL (\d{2}/\d{2}/\d{4})") #
-PATRON_CLABE = re.compile(r"No\. Cuenta CLABE\s+(\d+)") #
-PATRON_SALDO_ANT = re.compile(r"Saldo de Operación Inicial\s+([\d,.-]+)") #
-PATRON_DEPOSITOS = re.compile(r"Depósitos/Abonos \(\+\)\s+\d+\s+([\d,.-]+)") #
-PATRON_RETIROS = re.compile(r"Retiros/Cargos \(\-\)\s+\d+\s+([\d,.-]+)") #
-PATRON_SALDO_FINAL = re.compile(r"Saldo Final \(\+\)\s+([\d,.-]+)") #
-PATRON_SALDO_PROM = re.compile(r"Saldo Promedio\s+([\d,.-]+)") #
-PATRON_INICIO_TABLA = re.compile(r"Detalle de Movimientos Realizados") #
+
+# Se definen los patrones para los Datos Generales
+# SE HA CORREGIDO: Este regex ahora busca el nombre al inicio de la pagina
+PATRON_NOMBRE_EMPRESA = re.compile(r"^(.*?)\n(?:Información Financiera|BBVA\n)", re.DOTALL)
+# SE HA CORREGIDO: Este regex ahora busca el periodo en la pagina 2
+PATRON_PERIODO = re.compile(r"Periodo\s+(?:DEL\s+)?(\d{2}/\d{2}/\d{4})\s+AL\s+(\d{2}/\d{2}/\d{4})")
+PATRON_CLABE = re.compile(r"No\. Cuenta CLABE\s+(\d+)")
+PATRON_SALDO_ANT = re.compile(r"Saldo de Operación Inicial\s+([\d,.-]+)")
+PATRON_DEPOSITOS = re.compile(r"Depósitos/Abonos \(\+\)\s+\d+\s+([\d,.-]+)")
+PATRON_RETIROS = re.compile(r"Retiros/Cargos \(\-\)\s+\d+\s+([\d,.-]+)")
+PATRON_SALDO_FINAL = re.compile(r"Saldo Final \(\+\)\s+([\d,.-]+)")
+PATRON_SALDO_PROM = re.compile(r"Saldo Promedio\s+([\d,.-]+)")
+
+# Se define el patron para la tabla de transacciones
+PATRON_INICIO_TABLA = re.compile(r"Detalle de Movimientos Realizados")
 PATRON_TRANSACCIONES = re.compile(
     r"^(\d{2}/[A-Z]{3})\s+(\d{2}/[A-Z]{3})\s+(.*?)\s+([\d,.-]+)?\s+([\d,.-]+)?\s+([\d,.-]+)\s+([\d,.-]+)$",
     re.MULTILINE
-) #
+)
 
-def parsear_datos_generales(texto_completo):
+def _encontrar_pagina_principal(paginas_texto):
+    """
+    Se buscara en la lista de paginas hasta encontrar la que contiene
+    los datos de cabecera (para ignorar portadas).
+    """
+    # SE HA CORREGIDO: Marcadores mas robustos para la pagina principal
+    marcadores = ["No. Cuenta CLABE", "Saldo de Operación Inicial", "Depósitos/Abonos (+)", "Retiros/Cargos (-)"]
+    
+    # Se itera sobre cada pagina
+    for texto_pagina in paginas_texto:
+        # Se comprueba si todos los marcadores estan en el texto de esta pagina
+        if all(marcador in texto_pagina for marcador in marcadores):
+            # Se ha encontrado la pagina principal
+            return texto_pagina
+            
+    # Si no se encuentra, se retorna None
+    return None
+
+def parsear_datos_generales(paginas_texto):
     """
     Se extraeran los 8 campos de Datos Generales usando regex especificos
     para el formato BBVA Maestra Pyme.
@@ -26,19 +50,29 @@ def parsear_datos_generales(texto_completo):
     # Se inicializara el diccionario de datos
     datos = {}
     
-    # Se buscaran los patrones en el texto
-    match_nombre = PATRON_NOMBRE_EMPRESA.search(texto_completo)
-    match_periodo = PATRON_PERIODO.search(texto_completo)
-    match_clabe = PATRON_CLABE.search(texto_completo)
-    match_saldo_ant = PATRON_SALDO_ANT.search(texto_completo)
-    match_depositos = PATRON_DEPOSITOS.search(texto_completo)
-    match_retiros = PATRON_RETIROS.search(texto_completo)
-    match_saldo_final = PATRON_SALDO_FINAL.search(texto_completo)
-    match_saldo_prom = PATRON_SALDO_PROM.search(texto_completo)
+    # Se buscara la pagina que contiene los datos
+    texto_pagina_principal = _encontrar_pagina_principal(paginas_texto)
+    
+    if not texto_pagina_principal:
+        # Si no se encuentra la pagina principal, se retornan datos vacios
+        print("  > Advertencia: No se pudo encontrar la pagina de cabecera de BBVA.")
+        return datos
+
+    # Se buscaran los patrones en el texto de la pagina principal
+    match_nombre = PATRON_NOMBRE_EMPRESA.search(texto_pagina_principal)
+    match_periodo = PATRON_PERIODO.search(texto_pagina_principal)
+    match_clabe = PATRON_CLABE.search(texto_pagina_principal)
+    match_saldo_ant = PATRON_SALDO_ANT.search(texto_pagina_principal)
+    match_depositos = PATRON_DEPOSITOS.search(texto_pagina_principal)
+    match_retiros = PATRON_RETIROS.search(texto_pagina_principal)
+    match_saldo_final = PATRON_SALDO_FINAL.search(texto_pagina_principal)
+    match_saldo_prom = PATRON_SALDO_PROM.search(texto_pagina_principal)
     
     # Se asignaran los valores encontrados
-    datos['nombre_empresa'] = match_nombre.group(1).strip() if match_nombre else None
-    datos['periodo'] = f"{match_periodo.group(1)} - {match_periodo.group(2)}" if match_periodo else None
+    # SE HA CORREGIDO: Se limpia el nombre extraido
+    datos['nombre_empresa'] = re.sub(r'\s+', ' ', match_nombre.group(1).strip()) if match_nombre else None
+    # SE HA CORREGIDO: Se reconstruye el string del periodo para el formateador
+    datos['periodo'] = f"DEL {match_periodo.group(1)} AL {match_periodo.group(2)}" if match_periodo else None
     datos['numero_cuenta_clabe'] = match_clabe.group(1) if match_clabe else None
     
     # Se limpiaran los montos
@@ -51,29 +85,38 @@ def parsear_datos_generales(texto_completo):
     # Se retornaran los datos generales
     return datos
 
-def parsear_transacciones(texto_completo, saldo_inicial):
+def parsear_transacciones(paginas_texto, saldo_inicial):
     """
     Se extraeran las transacciones (11 campos) de la tabla de operaciones.
-    Este parser usa un regex de una sola linea por transaccion.
+    Se uniran todas las paginas DESPUES del inicio de la tabla.
     """
     # Se inicializara la lista
     transacciones = []
+    texto_transacciones_completo = ""
+    encontrado_inicio = False
     
-    # Se encontrara el inicio de la tabla
-    match_inicio = PATRON_INICIO_TABLA.search(texto_completo)
-    if not match_inicio:
+    # Se iteraran las paginas para encontrar el inicio y concatenar el resto
+    for texto_pagina in paginas_texto:
+        match_inicio = PATRON_INICIO_TABLA.search(texto_pagina)
+        if match_inicio:
+            # Se encontro el inicio, se toma el texto desde alli
+            encontrado_inicio = True
+            texto_transacciones_completo += texto_pagina[match_inicio.end():]
+        elif encontrado_inicio:
+            # Si ya se encontro el inicio, se anexa la pagina completa
+            texto_transacciones_completo += texto_pagina
+    
+    if not encontrado_inicio:
+        print("  > Advertencia: No se encontro el 'Detalle de Movimientos Realizados' en BBVA.")
         return []
         
-    # Se cortara el texto para empezar desde la tabla
-    texto_tabla = texto_completo[match_inicio.end():]
-    
     # Se encontrara el fin de la tabla
-    match_fin = re.search(r"Total de Movimientos", texto_tabla)
+    match_fin = re.search(r"Total de Movimientos", texto_transacciones_completo)
     if match_fin:
-        texto_tabla = texto_tabla[:match_fin.start()]
+        texto_transacciones_completo = texto_transacciones_completo[:match_fin.start()]
     
     # Se buscaran todas las coincidencias de transacciones
-    matches = PATRON_TRANSACCIONES.finditer(texto_tabla)
+    matches = PATRON_TRANSACCIONES.finditer(texto_transacciones_completo)
     
     # Se iterara sobre cada match encontrado
     for match in matches:

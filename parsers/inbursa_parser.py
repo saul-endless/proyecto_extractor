@@ -14,11 +14,14 @@ PATRON_SALDO_FINAL = re.compile(r"SALDO ACTUAL\s+([\d,.-]+)") #
 PATRON_SALDO_PROM = re.compile(r"SALDO PROMEDIO\s+([\d,.-]+)") #
 PATRON_INICIO_TABLA = re.compile(r"DETALLE DE MOVIMIENTOS") #
 
-def parsear_datos_generales(texto_completo):
+def parsear_datos_generales(paginas_texto):
     """
     Se extraeran los 8 campos de Datos Generales usando regex especificos
     para el formato Inbursa Empresarial.
     """
+    # Se uniran todas las paginas en un solo texto
+    texto_completo = "".join(paginas_texto)
+    
     # Se inicializara el diccionario de datos
     datos = {}
     
@@ -34,7 +37,7 @@ def parsear_datos_generales(texto_completo):
     
     # Se asignaran los valores encontrados
     datos['nombre_empresa'] = match_nombre.group(1).strip() if match_nombre else "AVILA TREJO CONTADORES Y CIA SC" #
-    datos['periodo'] = f"{match_periodo.group(1)} - {match_periodo.group(2)}" if match_periodo else None
+    datos['periodo'] = f"Del {match_periodo.group(1)} al {match_periodo.group(2)}" if match_periodo else None
     datos['numero_cuenta_clabe'] = match_clabe.group(1) if match_clabe else None
     
     # Se limpiaran los montos
@@ -47,11 +50,14 @@ def parsear_datos_generales(texto_completo):
     # Se retornaran los datos generales
     return datos
 
-def parsear_transacciones(texto_completo, saldo_inicial):
+def parsear_transacciones(paginas_texto, saldo_inicial):
     """
     Se extraeran las transacciones (11 campos) de la tabla de operaciones.
     Este parser usa un regex de bloques multilinea.
     """
+    # Se uniran todas las paginas en un solo texto
+    texto_completo = "".join(paginas_texto)
+    
     # Se inicializara la lista
     transacciones = []
     

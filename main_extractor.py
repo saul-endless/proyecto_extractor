@@ -89,7 +89,8 @@ class BankStatementExtractor:
 
     def _detectar_banco_y_producto(self, paginas_texto):
         """
-        Se detecta el banco basado en el contenido.
+        Detecta el banco basado en el contenido.
+        MEJORADO: Múltiples patrones de detección.
         """
         if not paginas_texto:
             return "desconocido"
@@ -97,18 +98,21 @@ class BankStatementExtractor:
         texto_completo = "".join(paginas_texto)
         texto_lower = texto_completo.lower()
         
-        if "bbva" in texto_lower:
-            if "maestra pyme" in texto_lower or "versatil negocios" in texto_lower:
+        # Detectar BBVA con múltiples patrones
+        if "bbva" in texto_lower or "bancomer" in texto_lower:
+            if any(palabra in texto_lower for palabra in ["maestra pyme", "versatil negocios", "empresas"]):
                 return "bbva_empresa"
             return "bbva_empresa"
-            
+        
+        # Detectar Inbursa
         if "inbursa" in texto_lower:
-            if "inbursact empresarial" in texto_lower:
+            if "inbursact empresarial" in texto_lower or "empresarial" in texto_lower:
                 return "inbursa_empresa"
             return "inbursa_empresa"
-            
-        if "banamex" in texto_lower:
-            if "inmovitur" in texto_lower:
+        
+        # Detectar Banamex
+        if "banamex" in texto_lower or "citibanamex" in texto_lower:
+            if "inmovitur" in texto_lower or "empresarial" in texto_lower:
                 return "banamex_empresa"
             return "banamex_empresa"
             

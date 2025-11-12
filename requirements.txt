@@ -1,12 +1,17 @@
 # Se utiliza para la extracción de texto nativo (PyMuPDF)
 fitz
-PyMuPDF
+PyMuPDF>=1.23.0
 
 # Se utiliza para la extracción OCR (PaddleOCR)
 # Es el motor principal segun la documentacion
-paddlepaddle
-paddleocr
+paddlepaddle>=2.5.0
+paddleocr>=2.7.0
 
 # Se utiliza para la validación cruzada (comparación de texto)
 thefuzz
 python-levenshtein
+
+# Librerias extras
+opencv-python>=4.8.0
+numpy>=1.24.0
+Pillow>=10.0.0

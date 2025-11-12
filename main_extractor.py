@@ -11,6 +11,7 @@ from datetime import datetime
 
 # Se importan los módulos locales
 from parsers import banamex_empresa_parser, bbva_parser, inbursa_parser
+from utils.image_preprocessing import prepare_image_for_ocr
 from utils import validators
 
 # Se suprimen las advertencias de PaddleOCR
@@ -42,8 +43,29 @@ class BankStatementExtractor:
         Se inicializa el extractor.
         """
         self.use_gpu = use_gpu
+        
+        # Forzar uso de CPU si use_gpu=False
+        if not self.use_gpu:
+            import os
+            os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+        
+        # Suprimir logs de PaddleOCR
+        import logging
+        logging.getLogger('ppocr').setLevel(logging.ERROR)
+        
         print("Inicializando motor OCR (PaddleOCR). Esto puede tomar un momento...")
-        self.ocr_engine = PaddleOCR(use_angle_cls=True, lang='es')
+        
+        # Inicializar PaddleOCR SIN el parámetro use_gpu
+        self.ocr_engine = PaddleOCR(
+            lang='es',
+            use_angle_cls=True,
+            det_db_thresh=0.2,
+            det_db_box_thresh=0.3,
+            rec_batch_num=16,
+            det_limit_side_len=3000,
+            det_limit_type='max'
+        )
+        
         print("Motor OCR listo.")
         
         self.parsers = {
@@ -69,22 +91,41 @@ class BankStatementExtractor:
 
     def _extract_text_ocr(self, pdf_path):
         """
-        Se extrae texto con OCR pagina por pagina.
-        Se devuelve lista de strings.
+        Se extrae texto con OCR página por página CON PREPROCESAMIENTO.
+        CRÍTICO: Preprocesa imágenes antes de OCR para mejorar detección.
         """
         paginas_texto = []
         try:
-            resultado_ocr = self.ocr_engine.ocr(str(pdf_path))
+            doc = fitz.open(pdf_path)
             
-            if resultado_ocr:
-                for pagina_resultado in resultado_ocr:
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                
+                try:
+                    # CRÍTICO: Preprocesar imagen antes de OCR
+                    img_preprocessed = prepare_image_for_ocr(page, enhance_tables=True)
+                    
+                    # Ejecutar OCR en imagen preprocesada SIN cls
+                    resultado_ocr = self.ocr_engine.ocr(img_preprocessed)  # ← SIN cls=True
+                    
+                    # Extraer texto de resultados
                     texto_pagina_actual = ""
-                    if pagina_resultado:
-                        for linea in pagina_resultado:
-                            texto_pagina_actual += linea[1][0] + "\n"
+                    if resultado_ocr and len(resultado_ocr) > 0 and resultado_ocr[0]:
+                        for linea in resultado_ocr[0]:
+                            if linea and len(linea) >= 2:
+                                texto_pagina_actual += linea[1][0] + "\n"
+                    
                     paginas_texto.append(texto_pagina_actual)
+                    
+                except Exception as e_page:
+                    print(f"  > Error procesando página {page_num + 1} con OCR: {e_page}")
+                    paginas_texto.append("")
+            
+            doc.close()
+            
         except Exception as e:
-            print(f"Error en extraccion OCR: {e}")
+            print(f"Error en extracción OCR: {e}")
+        
         return paginas_texto
 
     def _detectar_banco_y_producto(self, paginas_texto):
@@ -118,20 +159,28 @@ class BankStatementExtractor:
             
         return "desconocido"
 
-    def _parsear_texto(self, paginas_texto, parser_key):
+    def _parsear_texto_mejorado(self, paginas_texto, parser_key):
         """
-        Se ejecuta el parser correspondiente.
-        Se pasa lista de paginas al parser.
+        Se ejecuta el parser mejorado de BBVA v2.0.
+        SOLO para BBVA - usa la nueva estructura.
         """
-        if parser_key in self.parsers:
+        if parser_key == "bbva_empresa":
             parser = self.parsers[parser_key]
             
-            datos_generales = parser.parsear_datos_generales(paginas_texto)
-            transacciones = parser.parsear_transacciones(paginas_texto, datos_generales.get('saldo_inicial', 0))
+            # Convertir lista de páginas a texto completo
+            texto_completo = "\n".join(paginas_texto)
             
-            return {"datos_generales": datos_generales, "transacciones": transacciones}
+            # El nuevo parser de BBVA espera texto completo
+            resultado = parser.parse_bbva_empresa(texto_completo)
+            
+            # Adaptar formato de salida al esperado
+            return {
+                "datos_generales": resultado['metadata'],
+                "transacciones": resultado['transactions']
+            }
         else:
-            raise NotImplementedError(f"El parser para la llave '{parser_key}' no esta implementado.")
+            # Para otros bancos, usar método original
+            return self._parsear_texto(paginas_texto, parser_key)
 
     def _default_json_serializer(self, obj):
         """
@@ -195,6 +244,28 @@ class BankStatementExtractor:
         try:
             datos_generales = resultado_completo.get('datos_generales', {})
             transacciones = resultado_completo.get('transacciones', [])
+
+            transacciones_normalizadas = []
+            for tx in transacciones:
+                if 'Clasificación' in tx:
+                    tx_normalizada = {
+                        'fecha': tx.get('Fecha de la transacción', ''),
+                        'nombre': tx.get('Nombre de la transacción', ''),
+                        'nombre_resumido': tx.get('Nombre resumido', ''),
+                        'tipo': tx.get('Tipo de transacción', ''),
+                        'clasificacion': tx.get('Clasificación', ''),
+                        'quien_pago': tx.get('Quien realiza o recibe el pago', ''),
+                        'monto': float(tx.get('Monto de la transacción', 0)),
+                        'referencia': tx.get('Numero de referencia o folio', ''),
+                        'cuenta': tx.get('Numero de cuenta origen o destino', ''),
+                        'metodo_pago': tx.get('Metodo de pago', ''),
+                        'sucursal': tx.get('Sucursal o ubicacion', ''),
+                        'giro': tx.get('Giro de la transacción', '')
+                    }
+                else: 
+                    tx_normalizada = tx
+
+                transacciones_normalizadas.append(tx_normalizada)
             
             base_filename = self._formatear_nombre_archivo(datos_generales)
             
@@ -246,16 +317,40 @@ class BankStatementExtractor:
         print(f"Paso 4: Ejecutando parser especifico para '{parser_key}' (Intento 1: Nativo)...")
         resultado_final = None
         try:
-            resultado_final = self._parsear_texto(paginas_nativas, parser_key)
+            # Usar parser mejorado para BBVA
+            if parser_key == "bbva_empresa":
+                resultado_final = self._parsear_texto_mejorado(paginas_nativas, parser_key)
+            else:
+                resultado_final = self._parsear_texto(paginas_nativas, parser_key)
+            
             print("Parsing completado.")
+            
+            # Imprimir estadísticas
+            num_transacciones = len(resultado_final.get('transacciones', []))
+            print(f"  > Se extrajeron {num_transacciones} transacciones")
+            
         except Exception as e:
             print(f"  > Advertencia: El texto nativo no pudo ser parseado. Reintentando con OCR.")
+            print(f"  > Error nativo: {e}")
             try:
-                resultado_final = self._parsear_texto(paginas_ocr, parser_key)
+                # Usar parser mejorado para BBVA
+                if parser_key == "bbva_empresa":
+                    resultado_final = self._parsear_texto_mejorado(paginas_ocr, parser_key)
+                else:
+                    resultado_final = self._parsear_texto(paginas_ocr, parser_key)
+                
                 print("Parsing completado con OCR.")
+                
+                # Imprimir estadísticas
+                num_transacciones = len(resultado_final.get('transacciones', []))
+                print(f"  > Se extrajeron {num_transacciones} transacciones")
+                
             except Exception as e2:
                 print(f"ERROR: No se pudieron extraer datos ni con metodo Nativo ni con OCR.")
-                print(f"Detalle: {e2}")
+                print(f"Detalle nativo: {e}")
+                print(f"Detalle OCR: {e2}")
+                import traceback
+                traceback.print_exc()
                 return
 
         print("Paso 5: Ejecutando Validacion de Balance...")
@@ -269,8 +364,14 @@ class BankStatementExtractor:
 
         print("Paso 6: Ejecutando Validacion Cruzada (Nativo vs OCR)...")
         try:
-            resultado_a = self._parsear_texto(paginas_nativas, parser_key)
-            resultado_b = self._parsear_texto(paginas_ocr, parser_key)
+            # Usar parser correspondiente
+            if parser_key == "bbva_empresa":
+                resultado_a = self._parsear_texto_mejorado(paginas_nativas, parser_key)
+                resultado_b = self._parsear_texto_mejorado(paginas_ocr, parser_key)
+            else:
+                resultado_a = self._parsear_texto(paginas_nativas, parser_key)
+                resultado_b = self._parsear_texto(paginas_ocr, parser_key)
+            
             reporte_cruzado = validators.validar_cruzada(resultado_a, resultado_b)
             resultado_final['validacion_cruzada'] = reporte_cruzado
             for msg in reporte_cruzado['mensajes']:

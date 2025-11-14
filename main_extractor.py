@@ -239,55 +239,54 @@ class BankStatementExtractor:
 
     def guardar_resultados(self, resultado_completo, output_dir):
         """
-        Se guardan los resultados en 3 archivos JSON.
+        Se guardan los resultados en 3 archivos JSON con la estructura objetivo.
         """
         try:
             datos_generales = resultado_completo.get('datos_generales', {})
             transacciones = resultado_completo.get('transacciones', [])
-
-            transacciones_normalizadas = []
-            for tx in transacciones:
-                if 'Clasificación' in tx:
-                    tx_normalizada = {
-                        'fecha': tx.get('Fecha de la transacción', ''),
-                        'nombre': tx.get('Nombre de la transacción', ''),
-                        'nombre_resumido': tx.get('Nombre resumido', ''),
-                        'tipo': tx.get('Tipo de transacción', ''),
-                        'clasificacion': tx.get('Clasificación', ''),
-                        'quien_pago': tx.get('Quien realiza o recibe el pago', ''),
-                        'monto': float(tx.get('Monto de la transacción', 0)),
-                        'referencia': tx.get('Numero de referencia o folio', ''),
-                        'cuenta': tx.get('Numero de cuenta origen o destino', ''),
-                        'metodo_pago': tx.get('Metodo de pago', ''),
-                        'sucursal': tx.get('Sucursal o ubicacion', ''),
-                        'giro': tx.get('Giro de la transacción', '')
-                    }
-                else: 
-                    tx_normalizada = tx
-
-                transacciones_normalizadas.append(tx_normalizada)
             
-            base_filename = self._formatear_nombre_archivo(datos_generales)
+            # CRÍTICO: Eliminar campos auxiliares antes de guardar
+            datos_generales_limpios = {k: v for k, v in datos_generales.items() if not k.startswith('_')}
             
-            ingresos = [tx for tx in transacciones if tx.get('clasificacion') == 'Ingreso']
-            egresos = [tx for tx in transacciones if tx.get('clasificacion') == 'Egreso']
+            # Se obtienen los valores para el nombre del archivo
+            nombre_empresa = datos_generales_limpios.get('Nombre de la empresa del estado de cuenta', 'SIN_NOMBRE')
+            periodo = datos_generales_limpios.get('Periodo del estado de cuenta', 'SIN_PERIODO')
             
+            # Se limpia el nombre de la empresa para el nombre del archivo
+            nombre_limpio = re.sub(r'[^A-Z0-9_\s]', '', str(nombre_empresa).upper())
+            nombre_limpio = re.sub(r'\s+', '_', nombre_limpio.strip())
+            
+            # Se construye el nombre base del archivo
+            base_filename = f"{nombre_limpio}_{periodo}"
+            
+            # Se separan las transacciones por clasificacion
+            ingresos = [tx for tx in transacciones if tx.get('Clasificación') == 'Ingreso']
+            egresos = [tx for tx in transacciones if tx.get('Clasificación') == 'Egreso']
+            
+            # Se definen las rutas de los archivos
             ruta_datos = output_dir / f"{base_filename}_DATOS.json"
             ruta_ingresos = output_dir / f"{base_filename}_INGRESOS.json"
             ruta_egresos = output_dir / f"{base_filename}_EGRESOS.json"
             
+            # Se crea el directorio de salida si no existe
             output_dir.mkdir(parents=True, exist_ok=True)
             
+            # Se guarda el archivo de datos generales (sin campos auxiliares)
             with open(ruta_datos, 'w', encoding='utf-8') as f:
-                json.dump(datos_generales, f, indent=4, ensure_ascii=False, default=self._default_json_serializer)
+                json.dump(datos_generales_limpios, f, indent=4, ensure_ascii=False)
             
+            # Se guarda el archivo de ingresos
             with open(ruta_ingresos, 'w', encoding='utf-8') as f:
-                json.dump(ingresos, f, indent=4, ensure_ascii=False, default=self._default_json_serializer)
-                
+                json.dump(ingresos, f, indent=4, ensure_ascii=False)
+            
+            # Se guarda el archivo de egresos
             with open(ruta_egresos, 'w', encoding='utf-8') as f:
-                json.dump(egresos, f, indent=4, ensure_ascii=False, default=self._default_json_serializer)
-
+                json.dump(egresos, f, indent=4, ensure_ascii=False)
+            
             print(f"Resultados guardados exitosamente en 3 archivos con base: {base_filename}")
+            print(f"  - Datos generales: {ruta_datos.name}")
+            print(f"  - Ingresos ({len(ingresos)} transacciones): {ruta_ingresos.name}")
+            print(f"  - Egresos ({len(egresos)} transacciones): {ruta_egresos.name}")
             
         except Exception as e:
             print(f"Error al guardar los 3 archivos de resultados: {e}")

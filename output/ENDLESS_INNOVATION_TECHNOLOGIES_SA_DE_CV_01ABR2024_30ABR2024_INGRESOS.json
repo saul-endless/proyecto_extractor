@@ -1,0 +1,36 @@
+[
+    {
+        "Fecha de la transacción": "10-ABR-2024",
+        "Nombre de la transacción": "10/ABR  T20 SPEI RECIBIDOBANORTE 150,000.00 0240410Prestamo Pago Proveedores Ref. 0139453789 072 00072180003315083434 3843CP04202404102979100222 JEAN EMMANUEL ABONCE LEAL",
+        "Nombre resumido": "SPEI RECIBIDO desde SPEI RECIBIDOBANORTE",
+        "Tipo de transacción": "Transferencia",
+        "Clasificación": "Ingreso",
+        "Quien realiza o recibe el pago": "JEAN EMMANUEL ABONCE LEAL",
+        "Monto de la transacción": 150000.0,
+        "Numero de referencia o folio": "0139453789",
+        "Numero de cuenta origen o destino": "000721800033150834",
+        "Metodo de pago": "SPEI",
+        "Sucursal o ubicacion": "",
+        "Giro de la transacción": "",
+        "Análisis monto": "",
+        "Análisis contraparte": "",
+        "Análisis naturaleza": ""
+    },
+    {
+        "Fecha de la transacción": "30-ABR-2024",
+        "Nombre de la transacción": "30/ABR  T20 SPEI RECIBIDOBANORTE 38,408.00 0240430Prestamo Abr24 Complemento Ref. 0121969597 072 00072180003315083434 3843CP02202404303028020745 JEAN EMMANUEL ABONCE LEAL",
+        "Nombre resumido": "SPEI RECIBIDO desde SPEI RECIBIDOBANORTE",
+        "Tipo de transacción": "Transferencia",
+        "Clasificación": "Ingreso",
+        "Quien realiza o recibe el pago": "JEAN EMMANUEL ABONCE LEAL",
+        "Monto de la transacción": 38408.0,
+        "Numero de referencia o folio": "0121969597",
+        "Numero de cuenta origen o destino": "000721800033150834",
+        "Metodo de pago": "SPEI",
+        "Sucursal o ubicacion": "",
+        "Giro de la transacción": "",
+        "Análisis monto": "",
+        "Análisis contraparte": "",
+        "Análisis naturaleza": ""
+    }
+]

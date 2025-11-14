@@ -328,3 +328,120 @@ def classify_transaction(code, description, amount_column):
         clasificacion = 'Ingreso' if tipo in ['Deposito'] else 'Egreso'
     
     return tipo, metodo, clasificacion
+
+# ==================== SALDO PROMEDIO ====================
+
+def funcion_extraer_saldo_promedio(texto_completo):
+    """
+    Se extrae el saldo promedio del estado de cuenta.
+    Se busca en la seccion de Rendimiento.
+    """
+    # Se busca la seccion de Rendimiento
+    patron_rendimiento = r'Rendimiento'
+    match_rendimiento = re.search(patron_rendimiento, texto_completo, re.IGNORECASE)
+    
+    if not match_rendimiento:
+        return 0.0
+    
+    # Se trabaja con la seccion de rendimiento (siguientes 500 caracteres)
+    inicio = match_rendimiento.start()
+    seccion_rendimiento = texto_completo[inicio:inicio + 500]
+    
+    # Se busca "Saldo Promedio" seguido del monto
+    patron_saldo_promedio = r'Saldo\s+Promedio\s+([\d,]+\.?\d*)'
+    match_saldo = re.search(patron_saldo_promedio, seccion_rendimiento, re.IGNORECASE)
+    
+    if match_saldo:
+        monto_str = match_saldo.group(1)
+        monto = extract_amount(monto_str)
+        if monto and monto > 0:
+            return round(monto, 2)
+    
+    return 0.0
+
+
+# ==================== LIMPIEZA DE NOMBRE EMPRESA ====================
+
+def funcion_limpiar_nombre_empresa(nombre_empresa):
+    """
+    Se limpia el nombre de la empresa eliminando caracteres especiales.
+    Se reemplazan los caracteres: / \ : ? " < > | por -
+    """
+    if not nombre_empresa:
+        return ""
+    
+    # Se reemplazan caracteres especiales por guion
+    caracteres_invalidos = ['/', '\\', ':', '?', '"', '<', '>', '|']
+    nombre_limpio = nombre_empresa
+    
+    for caracter in caracteres_invalidos:
+        nombre_limpio = nombre_limpio.replace(caracter, '-')
+    
+    # Se eliminan espacios multiples
+    nombre_limpio = re.sub(r'\s+', ' ', nombre_limpio.strip())
+    
+    return nombre_limpio
+
+
+# ==================== FORMATO DE PERIODO ====================
+
+def funcion_formatear_periodo_archivo(periodo_str):
+    """
+    Se formatea el periodo al formato requerido: DDMMMAAAA_DDMMMAAAA
+    Ejemplo: DEL 01/04/2025 AL 30/04/2025 -> 01ABR2025_30ABR2025
+    """
+    if not periodo_str:
+        return ""
+    
+    # Se busca el patron DEL DD/MM/AAAA AL DD/MM/AAAA
+    patron = r'DEL\s+(\d{2})/(\d{2})/(\d{4})\s+AL\s+(\d{2})/(\d{2})/(\d{4})'
+    match = re.search(patron, periodo_str, re.IGNORECASE)
+    
+    if not match:
+        return ""
+    
+    # Se extraen los componentes
+    dia_inicio = match.group(1)
+    mes_inicio_num = match.group(2)
+    anio_inicio = match.group(3)
+    dia_fin = match.group(4)
+    mes_fin_num = match.group(5)
+    anio_fin = match.group(6)
+    
+    # Se mapea el numero de mes a abreviatura en mayusculas
+    meses = {
+        '01': 'ENE', '02': 'FEB', '03': 'MAR', '04': 'ABR',
+        '05': 'MAY', '06': 'JUN', '07': 'JUL', '08': 'AGO',
+        '09': 'SEP', '10': 'OCT', '11': 'NOV', '12': 'DIC'
+    }
+    
+    mes_inicio_abbr = meses.get(mes_inicio_num, 'XXX')
+    mes_fin_abbr = meses.get(mes_fin_num, 'XXX')
+    
+    # Se construye el formato final
+    periodo_formateado = f"{dia_inicio}{mes_inicio_abbr}{anio_inicio}_{dia_fin}{mes_fin_abbr}{anio_fin}"
+    
+    return periodo_formateado
+
+
+# ==================== AGREGAR CAMPOS ADICIONALES A TRANSACCIONES ====================
+
+def funcion_agregar_campos_adicionales_transaccion(transaccion_dict):
+    """
+    Se agregan los campos adicionales obligatorios a cada transaccion.
+    Los campos son: Giro de la transacción, Análisis monto, Análisis contraparte, Análisis naturaleza
+    """
+    campos_adicionales = {
+        "Giro de la transacción": "",  # ← CAMBIO: Era "Giro sugerido"
+        "Análisis monto": "",
+        "Análisis contraparte": "",
+        "Análisis naturaleza": ""
+    }
+    
+    # Se crea una copia del diccionario original
+    transaccion_completa = transaccion_dict.copy()
+    
+    # Se agregan los campos adicionales
+    transaccion_completa.update(campos_adicionales)
+    
+    return transaccion_completa

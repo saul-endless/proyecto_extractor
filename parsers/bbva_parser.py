@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Parser BBVA Empresa v3.3 FINAL
-Corrige: montos de transacciones y metadatos
+Parser BBVA Empresa v4.0 FINAL
+Estructura de salida objetivo con nombres en español
 """
 
 import re
@@ -19,18 +19,21 @@ from utils.field_extractors import (
     extract_beneficiary_name,
     create_summarized_name,
     extract_branch_from_header,
-    classify_transaction
+    classify_transaction,
+    funcion_extraer_saldo_promedio,
+    funcion_limpiar_nombre_empresa,
+    funcion_formatear_periodo_archivo,
+    funcion_agregar_campos_adicionales_transaccion
 )
 
 
 def parse_bbva_empresa(text_data, ocr_data=None):
     """Parser principal BBVA Empresa."""
-    print("\n=== Iniciando Parser BBVA Empresa v2.0 ===")
+    print("\n=== Iniciando Parser BBVA Empresa v4.0 ===")
     
     metadata = extract_metadata(text_data)
-    print(f"✓ Metadatos extraídos: {metadata['nombre_empresa']}")
-    print(f"✓ Período: {metadata['periodo']}")
-    print(f"✓ Sucursal extraída: {metadata.get('sucursal', 'N/A')}")
+    print(f"✓ Metadatos extraídos: {metadata['Nombre de la empresa del estado de cuenta']}")
+    print(f"✓ Período: {metadata['Periodo del estado de cuenta']}")
     
     transactions = extract_transactions(text_data, metadata)
     print(f"✓ Transacciones extraídas: {len(transactions)}")
@@ -44,17 +47,21 @@ def parse_bbva_empresa(text_data, ocr_data=None):
 
 
 def extract_metadata(text):
-    """Extrae metadatos."""
-    metadata = {
+    """
+    Se extraen los metadatos del estado de cuenta.
+    Se devuelve un diccionario con la estructura objetivo.
+    """
+    # Se inicializa el diccionario de metadatos con valores por defecto
+    metadata_raw = {
         'nombre_empresa': '',
         'periodo': '',
         'numero_cuenta_clabe': '',
         'numero_cuenta': '',
-        'saldo_inicial': '0',
-        'total_depositos': '0',
-        'total_retiros': '0',
-        'saldo_final': '0',
-        'saldo_promedio': '0',
+        'saldo_inicial': 0.0,
+        'total_depositos': 0.0,
+        'total_retiros': 0.0,
+        'saldo_final': 0.0,
+        'saldo_promedio': 0.0,
         'sucursal': '',
         'rfc': '',
         'numero_cliente': ''
@@ -62,46 +69,82 @@ def extract_metadata(text):
     
     lines = text.split('\n')
     
-    # Nombre de empresa
+    # Se extrae el nombre de empresa
     for line in lines[:30]:
-        if re.search(r'(TECHNOLOGIES|SA DE CV)', line, re.IGNORECASE):
-            metadata['nombre_empresa'] = line.strip()
+        if re.search(r'(TECHNOLOGIES|SA DE CV|S\.A\. DE C\.V\.|SOCIEDAD ANONIMA)', line, re.IGNORECASE):
+            metadata_raw['nombre_empresa'] = line.strip()
             break
     
-    # Período
+    # Se extrae el periodo
     period_match = re.search(r'DEL\s+(\d{2}/\d{2}/\d{4})\s+AL\s+(\d{2}/\d{2}/\d{4})', text, re.IGNORECASE)
     if period_match:
-        metadata['periodo'] = f"DEL {period_match.group(1)} AL {period_match.group(2)}"
+        metadata_raw['periodo'] = f"DEL {period_match.group(1)} AL {period_match.group(2)}"
     
-    # Cuenta
+    # Se extrae el numero de cuenta
     account_match = re.search(r'No\.\s*de\s*Cuenta\s+(\d{10})', text, re.IGNORECASE)
     if account_match:
-        metadata['numero_cuenta'] = account_match.group(1)
+        metadata_raw['numero_cuenta'] = account_match.group(1)
     
-    # CLABE
+    # Se extrae la CLABE
     clabe_match = re.search(r'CLABE\s+(\d{18})', text, re.IGNORECASE)
     if clabe_match:
-        metadata['numero_cuenta_clabe'] = clabe_match.group(1)
+        metadata_raw['numero_cuenta_clabe'] = clabe_match.group(1)
     
-    # RFC
+    # Se extrae el RFC
     rfc_match = re.search(r'R\.F\.C\s+([A-Z]{3,4}\d{6}[A-Z0-9]{3})', text, re.IGNORECASE)
     if rfc_match:
-        metadata['rfc'] = rfc_match.group(1)
+        metadata_raw['rfc'] = rfc_match.group(1)
     
-    # Cliente
+    # Se extrae el numero de cliente
     client_match = re.search(r'No\.\s*de\s*Cliente\s+(D\d{7})', text, re.IGNORECASE)
     if client_match:
-        metadata['numero_cliente'] = client_match.group(1)
+        metadata_raw['numero_cliente'] = client_match.group(1)
     
-    # Sucursal
+    # Se extrae la sucursal
     branch_match = re.search(r'SUCURSAL\s*:\s*(\d{4})', text, re.IGNORECASE)
     if branch_match:
-        metadata['sucursal'] = branch_match.group(1)
+        metadata_raw['sucursal'] = branch_match.group(1)
     
-    # CRÍTICO: Extraer montos DEFINITIVO
-    extract_financial_data_final(text, metadata)
+    # Se extraen los datos financieros (saldos y totales)
+    extract_financial_data_final(text, metadata_raw)
     
-    return metadata
+    # Se extrae el saldo promedio usando la nueva funcion
+    saldo_promedio = funcion_extraer_saldo_promedio(text)
+    metadata_raw['saldo_promedio'] = saldo_promedio
+    
+    # Se limpia el nombre de la empresa
+    nombre_limpio = funcion_limpiar_nombre_empresa(metadata_raw['nombre_empresa'])
+    
+    # Se formatea el periodo
+    periodo_formateado = funcion_formatear_periodo_archivo(metadata_raw['periodo'])
+    
+    # Se convierte a numeros (no strings)
+    saldo_inicial_num = float(metadata_raw.get('saldo_inicial', 0))
+    saldo_final_num = float(metadata_raw.get('saldo_final', 0))
+    total_depositos_num = float(metadata_raw.get('total_depositos', 0))
+    total_retiros_num = float(metadata_raw.get('total_retiros', 0))
+    
+    # Se construye el diccionario con la estructura objetivo
+    metadata_objetivo = {
+        "Nombre de la empresa del estado de cuenta": nombre_limpio,
+        "Numero de cuenta del estado de cuenta": metadata_raw['numero_cuenta'],
+        "Periodo del estado de cuenta": periodo_formateado,
+        "Saldo inicial de la cuenta": saldo_inicial_num,
+        "Saldo final de la cuenta": saldo_final_num,
+        "Saldo promedio del periodo": saldo_promedio,
+        "Cantidad total de depositos": total_depositos_num,
+        "Cantidad total de retiros": total_retiros_num,
+        "Giro de la empresa": "",
+        "Sucursal interna": metadata_raw['sucursal']  # ← CAMPO AGREGADO
+    }
+    
+    # Se almacenan valores auxiliares en un diccionario separado
+    metadata_objetivo['_auxiliar'] = {
+        'periodo_original': metadata_raw['periodo'],
+        'sucursal': metadata_raw['sucursal']
+    }
+    
+    return metadata_objetivo
 
 
 def extract_financial_data_final(text, metadata):
@@ -182,8 +225,9 @@ def extract_transactions(text, metadata):
     print(f"✓ Transacciones agrupadas: {len(transaction_groups)}")
     
     transactions = []
-    sucursal_default = metadata.get('sucursal', '')
-    period_start, period_end = parse_period(metadata.get('periodo', ''))
+    # Usar valores auxiliares
+    sucursal_default = ""  # ← CAMBIO: Dejar vacío
+    period_start, period_end = parse_period(metadata.get('_auxiliar', {}).get('periodo_original', ''))
     
     for group in transaction_groups:
         transaction = parse_single_transaction_final(group, sucursal_default, period_start, period_end)
@@ -237,14 +281,7 @@ def group_transaction_lines_fixed(lines):
                 current_group = []
             continue
         
-        if any(kw in line_upper for kw in ['FECHA', 'OPER', 'LIQ', 'DESCRIPCION', 'CARGOS', 'ABONOS']):
-            if 'COD' in line_upper:
-                continue
-        
-        if re.match(r'^[\s\-=_]+$', line):
-            continue
-        
-        if re.match(date_pattern, line_upper):
+        if re.match(date_pattern, line):
             if current_group:
                 groups.append(current_group)
             current_group = [line]
@@ -259,24 +296,27 @@ def group_transaction_lines_fixed(lines):
 
 
 def parse_single_transaction_final(lines, sucursal_default, period_start, period_end):
-    """VERSIÓN CORREGIDA: Fechas y montos."""
+    """
+    Se parsea una sola transaccion con la estructura objetivo.
+    Se devuelve un diccionario con todos los campos requeridos.
+    """
     if not lines:
         return None
     
     main_line = lines[0]
     full_text = '\n'.join(lines)
     
-    # Fecha CON AÑO CORRECTO
+    # Se extrae la fecha con año correcto
     fecha_match = re.search(r'(\d{2}/[A-Z]{3})', main_line.upper())
     if not fecha_match:
         return None
     
     fecha_str = fecha_match.group(1)
     
-    # CRÍTICO: Usar año del período
+    # Se usa el año del periodo
     if period_start:
         year = period_start.year
-        # Convertir mes de 3 letras a número
+        # Se convierte el mes de 3 letras a numero
         month_abbr = fecha_str.split('/')[1]
         month_num = {
             'ENE': '01', 'FEB': '02', 'MAR': '03', 'ABR': '04',
@@ -289,23 +329,23 @@ def parse_single_transaction_final(lines, sucursal_default, period_start, period
     else:
         fecha = None
     
-    # Código
+    # Se extrae el codigo
     code_match = re.search(r'\b([A-Z]\d{2,3})\b', main_line.upper())
     code = code_match.group(1) if code_match else ""
     
-    # Nombre completo
+    # Se extrae el nombre completo
     nombre_completo = extract_full_transaction_name(lines)
     
-    # Beneficiario
+    # Se extrae el beneficiario
     quien = extract_beneficiary_name(lines)
     
-    # MONTO MEJORADO
+    # Se extrae el monto
     monto = extract_transaction_amount_improved(lines, nombre_completo)
     
     if monto is None or monto <= 0:
         return None
     
-    # Columna
+    # Se determina la columna (ABONOS o CARGOS)
     if code in ['T17', 'A15', 'A14', 'S39', 'S40', 'G30', 'P14', 'N06']:
         amount_column = 'CARGOS'
     elif code in ['T20', 'W02', 'W01']:
@@ -313,25 +353,31 @@ def parse_single_transaction_final(lines, sucursal_default, period_start, period
     else:
         amount_column = 'ABONOS' if 'RECIBIDO' in nombre_completo.upper() else 'CARGOS'
     
+    # Se extraen los campos adicionales
     referencia = extract_reference(full_text)
     cuenta = extract_account_number(full_text)
     tipo, metodo, clasificacion = classify_transaction(code, nombre_completo, amount_column)
     nombre_resumido = create_summarized_name(nombre_completo, tipo, metodo)
     
-    return {
-        'fecha': fecha or "",
-        'nombre': nombre_completo,
-        'nombre_resumido': nombre_resumido,
-        'tipo': tipo,
-        'clasificacion': clasificacion,
-        'quien_pago': quien,
-        'monto': abs(monto),
-        'referencia': referencia,
-        'cuenta': cuenta,
-        'metodo_pago': metodo,
-        'sucursal': sucursal_default,
-        'giro': ""
+    # Se construye el diccionario base con la estructura objetivo
+    transaccion_base = {
+        "Fecha de la transacción": fecha or "",
+        "Nombre de la transacción": nombre_completo,
+        "Nombre resumido": nombre_resumido,
+        "Tipo de transacción": tipo,
+        "Clasificación": clasificacion,
+        "Quien realiza o recibe el pago": quien,
+        "Monto de la transacción": abs(monto),
+        "Numero de referencia o folio": referencia,
+        "Numero de cuenta origen o destino": cuenta,
+        "Metodo de pago": metodo,
+        "Sucursal o ubicacion": sucursal_default
     }
+    
+    # Se agregan los campos adicionales obligatorios
+    transaccion_completa = funcion_agregar_campos_adicionales_transaccion(transaccion_base)
+    
+    return transaccion_completa
 
 def extract_transaction_amount_improved(lines, nombre_completo):
     """
@@ -393,53 +439,6 @@ def extract_transaction_amount_improved(lines, nombre_completo):
     
     return None
 
-def extract_transaction_amount_final(lines, nombre_completo):
-    """
-    VERSIÓN FINAL: Extrae monto EVITANDO IDs.
-    
-    Reglas ESTRICTAS:
-    1. NO capturar números después de "#" o "-" (IDs)
-    2. Solo formato moneda: XXX.XX o X,XXX.XX
-    3. Al final de línea
-    4. Rango: $0.01 - $1,000,000
-    """
-    for line in lines:
-        line_clean = line.strip()
-        
-        # SKIP si contiene CLABE (18 dígitos)
-        if re.search(r'\d{18}', line_clean):
-            continue
-        
-        # SKIP si tiene "#" o "-" seguido de números largos (IDs)
-        if re.search(r'[#\-][A-Z]*(\d{7,})', line_clean):
-            continue
-        
-        # SKIP si la línea es principalmente código alfanumérico
-        if re.search(r'[A-Z0-9]{15,}', line_clean.upper()):
-            continue
-        
-        # Buscar monto AL FINAL de línea con formato correcto
-        # Debe tener punto decimal o ser menor a 1000
-        amount_match = re.search(r'([\d,]+\.\d{2})\s*$', line_clean)
-        
-        if amount_match:
-            amount_str = amount_match.group(1)
-            amount = extract_amount(amount_str)
-            
-            # Validar rango razonable
-            if amount and 0.01 <= amount <= 1000000:
-                return amount
-        
-        # Fallback: números pequeños sin decimales (comisiones)
-        simple_match = re.search(r'(\d{1,5})\s*$', line_clean)
-        if simple_match and not amount_match:
-            amount_str = simple_match.group(1)
-            amount = extract_amount(amount_str)
-            if amount and 0.01 <= amount <= 10000:
-                return amount
-    
-    return None
-
 
 def parse_period(period_str):
     """Convierte período a datetime."""
@@ -462,11 +461,11 @@ def validate_balance(transactions, metadata):
     """Valida balance."""
     print("\n=== Validando Balance ===")
     
-    total_ingresos = sum(t['monto'] for t in transactions if t['clasificacion'] == 'Ingreso')
-    total_egresos = sum(t['monto'] for t in transactions if t['clasificacion'] == 'Egreso')
+    total_ingresos = sum(t['Monto de la transacción'] for t in transactions if t['Clasificación'] == 'Ingreso')
+    total_egresos = sum(t['Monto de la transacción'] for t in transactions if t['Clasificación'] == 'Egreso')
     
-    declarado_depositos = float(metadata.get('total_depositos', 0))
-    declarado_retiros = float(metadata.get('total_retiros', 0))
+    declarado_depositos = float(metadata.get('Cantidad total de depositos', 0))
+    declarado_retiros = float(metadata.get('Cantidad total de retiros', 0))
     
     diff_depositos = abs(total_ingresos - declarado_depositos)
     diff_retiros = abs(total_egresos - declarado_retiros)

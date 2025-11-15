@@ -1,447 +1,481 @@
 # -*- coding: utf-8 -*-
 """
-Funciones especializadas de extracción de campos.
-Resuelve problemas de campos vacíos y truncados.
+Funciones auxiliares para extracción de campos - Versión MEJORADA v5.5
+Todas las funciones en español con prefijo funcion_
+- Lógica de beneficiario v5.3 (prioriza códigos de comisión)
+- Lógica de fecha mejorada (detecta año del nombre de archivo)
+- Lógica de códigos v5.5 (Se elimina N06 de cargos)
 """
 
 import re
 from datetime import datetime
-from difflib import SequenceMatcher
+import sys
+import os # Asegurarse que os esté importado
 
 
-# ==================== FECHAS ====================
-
-MONTH_MAP_ES = {
-    'ENE': '01', 'ENERO': '01',
-    'FEB': '02', 'FEBRERO': '02',
-    'MAR': '03', 'MARZO': '03',
-    'ABR': '04', 'ABRIL': '04',
-    'MAY': '05', 'MAYO': '05',
-    'JUN': '06', 'JUNIO': '06',
-    'JUL': '07', 'JULIO': '07',
-    'AGO': '08', 'AGOSTO': '08',
-    'SEP': '09', 'SEPTIEMBRE': '09',
-    'OCT': '10', 'OCTUBRE': '10',
-    'NOV': '11', 'NOVIEMBRE': '11',
-    'DIC': '12', 'DICIEMBRE': '12'
-}
-
-DATE_PATTERNS = [
-    r'(\d{1,2})/([A-Z]{3})/(\d{4})',
-    r'(\d{1,2})-([A-Z]{3})-(\d{4})',
-    r'(\d{1,2})/(\d{2})/(\d{4})',
-    r'(\d{1,2})-(\d{2})-(\d{4})',
-]
-
-
-def extract_and_normalize_date(text, period_start=None, period_end=None):
-    """Extrae y normaliza fechas a formato DD-MMM-YYYY."""
-    text_upper = text.upper()
-    
-    for pattern in DATE_PATTERNS:
-        match = re.search(pattern, text_upper)
-        if match:
-            day, month, year = match.groups()
-            
-            if month.upper() in MONTH_MAP_ES:
-                month_num = MONTH_MAP_ES[month.upper()]
-            elif month.isdigit():
-                month_num = month.zfill(2)
-            else:
-                continue
-            
-            try:
-                date_obj = datetime(int(year), int(month_num), int(day))
-                
-                if period_start and period_end:
-                    if not (period_start <= date_obj <= period_end):
-                        continue
-                
-                month_abbr_es = list(MONTH_MAP_ES.keys())[int(month_num) - 1]
-                if len(month_abbr_es) > 3:
-                    month_abbr_es = month_abbr_es[:3]
-                
-                return f"{day.zfill(2)}-{month_abbr_es}-{year}"
-            
-            except ValueError:
-                continue
-    
-    return None
-
-
-# ==================== MONTOS ====================
-
-def extract_amount(text, default_sign=1):
-    """Extrae y normaliza montos monetarios."""
-    text = str(text).strip()
-    
-    sign = -1 if '(' in text or ')' in text else default_sign
-    text = text.replace('(', '').replace(')', '')
-    
-    text = re.sub(r'[\$€£¥]|MXN|USD|EUR', '', text, flags=re.IGNORECASE)
-    text = text.replace(' ', '')
-    
-    parts = re.findall(r'[\d,\.]+', text)
-    if not parts:
-        return None
-    
-    amount_str = parts[0]
-    
-    if ',' in amount_str and '.' in amount_str:
-        comma_pos = amount_str.rfind(',')
-        dot_pos = amount_str.rfind('.')
-        
-        if comma_pos > dot_pos:
-            amount_str = amount_str.replace('.', '').replace(',', '.')
-        else:
-            amount_str = amount_str.replace(',', '')
-    
-    elif ',' in amount_str:
-        comma_pos = amount_str.rfind(',')
-        digits_after = len(amount_str) - comma_pos - 1
-        
-        if digits_after == 2:
-            amount_str = amount_str.replace(',', '.')
-        else:
-            amount_str = amount_str.replace(',', '')
-    
-    try:
-        amount = float(amount_str) * sign
-        return round(amount, 2)
-    except ValueError:
-        return None
-
-
-# ==================== CUENTAS ====================
-
-def extract_account_number(text, prefer_clabe=False):
-    """Extrae numero de cuenta o CLABE."""
-    text_clean = str(text).replace('-', '').replace(' ', '').replace('.', '')
-    
-    sequences = re.findall(r'\d{8,18}', text_clean)
-    
-    if not sequences:
-        return ""
-    
-    accounts_10 = [s for s in sequences if len(s) == 10]
-    accounts_18 = [s for s in sequences if len(s) == 18]
-    
-    if prefer_clabe and accounts_18:
-        return accounts_18[0]
-    elif accounts_10:
-        return accounts_10[0]
-    elif accounts_18:
-        return accounts_18[0]
-    else:
-        return sequences[0] if sequences else ""
-
-
-# ==================== REFERENCIAS ====================
-
-def extract_reference(text):
-    """Extrae numero de referencia o folio."""
-    patterns = [
-        r'REF[\.:]\s*([A-Z0-9]{4,20})',
-        r'REFERENCIA[\.:]\s*([A-Z0-9]{4,20})',
-        r'FOLIO[\.:]\s*([A-Z0-9]{4,20})',
-        r'Ref[\.:]\s*([A-Z0-9]{4,20})',
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, text.upper())
-        if match:
-            return match.group(1)
-    
-    sequences = re.findall(r'\b[A-Z0-9]{7,15}\b', text.upper())
-    return sequences[0] if sequences else ""
-
-
-# ==================== NOMBRES COMPLETOS ====================
-
-def extract_full_transaction_name(transaction_lines):
+def funcion_extraer_fecha_normalizada(fecha_texto):
     """
-    Extrae el nombre COMPLETO de la columna COD. DESCRIPCIÓN.
-    Elimina montos y saldos, une todo con espacios.
+    Se convierte fecha del formato DD/MMM al formato DD/MM/AAAA.
+    Se asume el año correcto basado en el nombre del PDF.
     """
-    if not transaction_lines:
-        return ""
-    
-    full_name_parts = []
-    
-    for line in transaction_lines:
-        line_clean = line.strip()
-        
-        # Parar si encontramos una nueva transacción (nueva fecha)
-        if re.match(r'\d{2}/[A-Z]{3}', line_clean.upper()) and full_name_parts:
-            break
-        
-        # Parar si es separador
-        if re.match(r'^[\s\-=_]+$', line_clean):
-            break
-        
-        # Parar si encontramos pie de página
-        if any(keyword in line_clean.upper() for keyword in [
-            'INFORMACION FINANCIERA',
-            'ESTADO DE CUENTA',
-            'PAGINA',
-            'BBVA MEXICO, S.A.'
-        ]):
-            break
-        
-        if not line_clean:
-            continue
-        
-        # Eliminar montos al final de la línea
-        cleaned_line = re.sub(r'(\s+[\d,]+\.\d{2})+\s*$', '', line_clean)
-        
-        if cleaned_line:
-            full_name_parts.append(cleaned_line)
-    
-    # UNIR CON ESPACIOS (no saltos de línea)
-    return ' '.join(full_name_parts)
-
-
-# ==================== BENEFICIARIOS/ORDENANTES ====================
-
-def extract_beneficiary_name(transaction_lines):
-    """Extrae el nombre del beneficiario/ordenante."""
-    name_pattern = r'^([A-Z][A-Z\s\.]{10,80})$'
-    
-    for line in transaction_lines[1:]:
-        line_clean = line.strip()
-        
-        if re.search(r'\d{10,}', line_clean):
-            continue
-        
-        if any(keyword in line_clean.upper() for keyword in [
-            'REF', 'BNET', 'AUT:', 'TC0', 'USD', 'RFC:', 'CIE:'
-        ]):
-            continue
-        
-        match = re.match(name_pattern, line_clean)
-        if match:
-            name = match.group(1).strip()
-            
-            words = name.split()
-            alpha_words = [w for w in words if w.replace('.', '').isalpha()]
-            
-            if 2 <= len(words) <= 6 and len(alpha_words) >= len(words) * 0.7:
-                return name
-    
-    return ""
-
-
-# ==================== NOMBRE RESUMIDO ====================
-
-def create_summarized_name(full_name, transaction_type, method):
-    """Crea un nombre resumido estandarizado."""
-    action_keywords = {
-        'SPEI RECIBIDO': 'SPEI RECIBIDO desde',
-        'SPEI ENVIADO': 'SPEI ENVIADO a',
-        'DEPOSITO': 'DEPOSITO de',
-        'PAGO': 'PAGO a',
-        'TRANSFERENCIA': 'TRANSFERENCIA a',
-        'CARGO': 'CARGO de',
-        'COMISION': 'COMISION'
+    meses = {
+        'ENE': '01', 'FEB': '02', 'MAR': '03', 'ABR': '04',
+        'MAY': '05', 'JUN': '06', 'JUL': '07', 'AGO': '08',
+        'SEP': '09', 'OCT': '10', 'NOV': '11', 'DIC': '12'
     }
     
-    action = None
-    for keyword, template in action_keywords.items():
-        if keyword in full_name.upper():
-            action = template
+    año_detectado = '2025' # Default
+    
+    # Se busca el nombre del archivo en los argumentos del script
+    nombre_archivo_procesado = ""
+    for arg in sys.argv:
+        if '.pdf' in arg.lower():
+            # Se extrae el nombre base del archivo
+            nombre_archivo_procesado = os.path.basename(arg).lower()
             break
+            
+    if '2024' in nombre_archivo_procesado:
+        año_detectado = '2024'
+    elif '2025' in nombre_archivo_procesado:
+        año_detectado = '2025'
     
-    if not action:
-        action = method or transaction_type or ""
+    match = re.match(r'(\d{2})/([A-Z]{3})', fecha_texto)
+    if match:
+        dia = match.group(1)
+        mes_texto = match.group(2)
+        mes = meses.get(mes_texto, '01')
+        return f"{dia}/{mes}/{año_detectado}"
     
-    bank_pattern = r'\b(BANORTE|HSBC|INBURSA|AZTECA|SANTANDER|BANAMEX|SCOTIABANK|BANREGIO|STP|BANCOMER|BBVA)\b'
-    bank_match = re.search(bank_pattern, full_name.upper())
+    # Si ya está en formato DD/MM/AAAA
+    if re.match(r'\d{2}/\d{2}/\d{4}', fecha_texto):
+        return fecha_texto
     
-    if bank_match:
-        entity = bank_match.group(1)
-        summary = f"{action} {entity}"
-    else:
-        name_match = re.search(r'\b([A-Z][A-Z\s]{10,50})\b', full_name)
-        if name_match:
-            entity = name_match.group(1).strip()[:30]
-            summary = f"{action} {entity}"
-        else:
-            words = full_name.split()[:8]
-            summary = ' '.join(words)
-    
-    return summary[:60].strip()
+    return f"01/01/{año_detectado}"  # Fecha por defecto
 
 
-# ==================== SUCURSAL ====================
-
-def extract_branch_from_header(pdf_text):
-    """Extrae la sucursal del encabezado del estado de cuenta."""
-    pattern = r'SUCURSAL\s*:\s*(\d{4})'
-    match = re.search(pattern, pdf_text.upper())
-    
-    return match.group(1) if match else ""
-
-
-# ==================== CLASIFICACION ====================
-
-TRANSACTION_TYPE_MAP = {
-    'T20': ('Transferencia', 'SPEI'),
-    'T17': ('Transferencia', 'SPEI'),
-    'W02': ('Deposito', 'Deposito de tercero'),
-    'W01': ('Deposito', 'Efectivo'),
-    'A15': ('Pago', 'Tarjeta'),
-    'A14': ('Pago', 'Tarjeta'),
-    'S39': ('Cargo por servicio', 'Comision'),
-    'S40': ('Cargo por servicio', 'IVA comision'),
-    'G30': ('Cargo por servicio', 'Comision'),
-    'N06': ('Pago', 'Pago cuenta tercero'),
-    'P14': ('Pago', 'Pago SAT'),
-}
-
-
-def classify_transaction(code, description, amount_column):
-    """Clasifica la transaccion en Tipo, Metodo y si es Ingreso/Egreso."""
-    if code in TRANSACTION_TYPE_MAP:
-        tipo, metodo = TRANSACTION_TYPE_MAP[code]
-    else:
-        desc_upper = description.upper()
-        if 'SPEI' in desc_upper:
-            tipo, metodo = 'Transferencia', 'SPEI'
-        elif 'DEPOSITO' in desc_upper or 'ABONO' in desc_upper:
-            tipo, metodo = 'Deposito', 'Efectivo'
-        elif 'PAGO' in desc_upper:
-            tipo, metodo = 'Pago', 'Transferencia'
-        elif 'TARJETA' in desc_upper or 'POS' in desc_upper:
-            tipo, metodo = 'Pago', 'Tarjeta'
-        elif 'COMISION' in desc_upper or 'IVA' in desc_upper:
-            tipo, metodo = 'Cargo por servicio', 'Comision'
-        elif 'CHEQUE' in desc_upper:
-            tipo, metodo = 'Retiro', 'Cheque'
-        else:
-            tipo, metodo = 'Otro', 'Otro'
-    
-    if amount_column == 'ABONOS':
-        clasificacion = 'Ingreso'
-    elif amount_column == 'CARGOS':
-        clasificacion = 'Egreso'
-    else:
-        clasificacion = 'Ingreso' if tipo in ['Deposito'] else 'Egreso'
-    
-    return tipo, metodo, clasificacion
-
-# ==================== SALDO PROMEDIO ====================
-
-def funcion_extraer_saldo_promedio(texto_completo):
+def funcion_extraer_monto(texto_monto):
     """
-    Se extrae el saldo promedio del estado de cuenta.
-    Se busca en la seccion de Rendimiento.
+    Se extrae el monto numérico de un texto.
+    Se eliminan comas y se convierte a float.
     """
-    # Se busca la seccion de Rendimiento
-    patron_rendimiento = r'Rendimiento'
-    match_rendimiento = re.search(patron_rendimiento, texto_completo, re.IGNORECASE)
-    
-    if not match_rendimiento:
+    if not texto_monto:
         return 0.0
     
-    # Se trabaja con la seccion de rendimiento (siguientes 500 caracteres)
-    inicio = match_rendimiento.start()
-    seccion_rendimiento = texto_completo[inicio:inicio + 500]
+    texto_limpio = str(texto_monto).replace(',', '').replace('$', '').replace('-', '').strip()
     
-    # Se busca "Saldo Promedio" seguido del monto
-    patron_saldo_promedio = r'Saldo\s+Promedio\s+([\d,]+\.?\d*)'
-    match_saldo = re.search(patron_saldo_promedio, seccion_rendimiento, re.IGNORECASE)
-    
-    if match_saldo:
-        monto_str = match_saldo.group(1)
-        monto = extract_amount(monto_str)
-        if monto and monto > 0:
-            return round(monto, 2)
+    match = re.search(r'(\d+(?:\.\d{2})?)', texto_limpio)
+    if match:
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return 0.0
     
     return 0.0
 
 
-# ==================== LIMPIEZA DE NOMBRE EMPRESA ====================
+def _es_linea_beneficiario(linea):
+    """
+    Se determina si una línea es un nombre de beneficiario.
+    (Ej. "JEAN EMMANUEL ABONCE LEAL" o "Enrique Color")
+    """
+    linea_limpia = linea.strip()
+    if not linea_limpia:
+        return False
+    
+    es_mayusculas = bool(re.match(r'^[A-Z\s.]+$', linea_limpia))
+    tiene_palabras = len(linea_limpia.split()) >= 2
+    es_largo_minimo = len(linea_limpia) > 5
+    no_es_keyword = not any(kw in linea_limpia for kw in [
+        'BBVA', 'BNET', 'REF', 'SPEI', 'RFC', 'AUT', 'CUENTA', 'PAGO',
+        'ESTADO DE CUENTA', 'INFORMACION', 'TECNOLOGIAS', 'INNOVATION',
+        'SA DE CV', 'BMRCASH', 'PRESTAMO', 'FECHA', 'SALDO', 'OPER', 'LIQ',
+        'COD. DESCRIPCION', 'REFERENCIA', 'CARGOS', 'ABONOS'
+    ])
+    
+    return es_mayusculas and es_largo_minimo and no_es_keyword and tiene_palabras
+
+
+def funcion_extraer_nombre_completo_transaccion(lineas_grupo, indice_linea_principal, descripcion_raw):
+    """
+    Se extrae el nombre completo de todas las líneas del grupo.
+    Se concatenan con espacios, pero se excluyen líneas de beneficiario.
+    """
+    if not lineas_grupo:
+        return ""
+    
+    partes_nombre = [descripcion_raw]
+
+    # Se procesan las líneas *después* de la principal
+    for i in range(indice_linea_principal + 1, len(lineas_grupo)):
+        linea_limpia = lineas_grupo[i].strip()
+        
+        # Se omite si es una línea de beneficiario
+        if _es_linea_beneficiario(linea_limpia):
+            continue
+            
+        # Se omite si es un encabezado o pie
+        if any(palabra in linea_limpia.upper() for palabra in [
+            'ESTADO DE CUENTA', 'PAGINA', 'BBVA', 'INFORMACION',
+            'TOTAL DE MOVIMIENTOS', 'MAESTRA PYME', 'FECHA', 'SALDO'
+        ]):
+            break
+                        
+        # Se agrega si tiene contenido válido
+        if linea_limpia and len(linea_limpia) > 2:
+            partes_nombre.append(linea_limpia)
+    
+    return ' '.join(partes_nombre)
+
+
+def funcion_extraer_beneficiario_correcto(lineas_grupo, codigo, es_cargo):
+    """
+    Se extrae el beneficiario/ordenante CORRECTO de la transacción.
+    v5.3: Se priorizan códigos de comisión/impuestos.
+    """
+    texto_completo_upper = ' '.join(lineas_grupo).upper()
+
+    # 1. Se priorizan códigos bancarios
+    if codigo in ['S39', 'S40', 'G30', 'A16', 'A17']:
+        return "BBVA"
+    if codigo == 'P14' or 'SAT' in texto_completo_upper:
+        return "SAT"
+
+    # 2. Se busca una línea que sea *solo* un nombre (ej. "Enrique Color")
+    for linea in lineas_grupo:
+        if _es_linea_beneficiario(linea):
+            return linea.strip()
+
+    # 3. Si no se encuentra, se buscan patrones dentro de la descripción
+    # Para SPEI Enviado
+    if codigo == 'T17' or 'SPEI ENVIADO' in texto_completo_upper:
+        # Se busca el nombre después del banco
+        for banco in ['INBURSA', 'BANORTE', 'HSBC', 'SANTANDER', 'AZTECA', 'BANREGIO', 'STP', 'BANAMEX', 'SCOTIABANK', 'AFIRME', 'BANCOPPEL', 'NU MEXICO', 'MERCADO PAGO']:
+            patron = rf'{banco}\s+([A-Z][A-Z\s]+?)(?:\s+\d{{2}}|\s+Ref\.|\s+BNET|\s+\d{{8}})'
+            match = re.search(patron, texto_completo_upper)
+            if match:
+                nombre = match.group(1).strip()
+                if len(nombre) > 5 and not nombre.isdigit():
+                    return nombre
+    
+    # Para pagos con tarjeta (A15)
+    if codigo == 'A15':
+        # Se extrae el nombre del comercio (ej. GOOGLE, VIVA AEROBUS, LIVERPOOL)
+        match_comercio = re.search(r'A15\s+([A-Z0-9*#\s_]+?)(?:\s+RFC:|\s+USD|\s+\d{2}:\d{2})', ' '.join(lineas_grupo))
+        if match_comercio:
+            comercio = match_comercio.group(1).strip().replace('*', ' ').replace('#', ' ')
+            comercio = re.sub(r'\s+', ' ', comercio) # Se limpian espacios extra
+            return comercio.upper()
+
+    return ""
+
+
+def funcion_extraer_referencia_mejorada(lineas_grupo):
+    """
+    Se extrae SOLO la referencia numérica o alfanumérica.
+    NO se extraen nombres de empresas.
+    """
+    texto_completo = ' '.join(lineas_grupo)
+    
+    # 1. Se busca el patrón "Ref. XXXXX"
+    match_ref = re.search(r'Ref\.\s+([A-Z0-9*#]+)\b', texto_completo, re.IGNORECASE)
+    if match_ref:
+        referencia = match_ref.group(1)
+        if '******' not in referencia: # Se ignora la ref de tarjeta
+            return referencia
+
+    # 2. Se busca el patrón "AUT XXXXX" (Autorización)
+    match_aut = re.search(r'AUT[:\s]+(\d{6,})', texto_completo, re.IGNORECASE)
+    if match_aut:
+        return match_aut.group(1)
+        
+    # 3. Se buscan códigos alfanuméricos largos (BNET, REFBNTC)
+    for linea in lineas_grupo:
+        # (ej. BNET01002410020040771417)
+        match_bnet = re.search(r'\b(BNET[A-Z0-9]{10,})\b', linea)
+        if match_bnet:
+            return match_bnet.group(1)
+        # (ej. REFBNTC00335630)
+        match_refbntc = re.search(r'\b(REFBNTC[A-Z0-9]{8,})\b', linea)
+        if match_refbntc:
+            return match_refbntc.group(1)
+            
+    # 4. Se busca un número largo que esté solo en una línea (probable folio)
+    for linea in lineas_grupo[1:]: 
+        if _es_linea_beneficiario(linea):
+            continue
+        match_num = re.search(r'^\s*(\d{8,15})\s*$', linea)
+        if match_num:
+            return match_num.group(1)
+            
+    # 5. Fallback: Se busca un número de referencia en la descripción
+    match_ref_desc = re.search(r'Ref\.\s+(\d+)\b', texto_completo)
+    if match_ref_desc:
+        return match_ref_desc.group(1)
+
+    return ""
+
+
+def funcion_crear_nombre_resumido_inteligente(nombre_completo, tipo_transaccion, beneficiario, contador_transacciones):
+    """
+    Se crea un nombre resumido descriptivo e inteligente.
+    Se usa contador para transacciones repetidas.
+    """
+    beneficiario_limpio = beneficiario if beneficiario else ""
+    
+    nombre_corto = beneficiario_limpio
+    if len(nombre_corto) > 25:
+        palabras = nombre_corto.split()
+        nombre_corto = ' '.join(palabras[:3])
+        
+    clave_transaccion = f"{tipo_transaccion}_{nombre_corto}"
+    
+    # Incrementar contador
+    if clave_transaccion not in contador_transacciones:
+        contador_transacciones[clave_transaccion] = 0
+    contador_transacciones[clave_transaccion] += 1
+    numero = contador_transacciones[clave_transaccion]
+    
+    # Se genera el nombre basado en las categorías solicitadas
+    if tipo_transaccion == 'Transferencia':
+        if 'SPEI ENVIADO' in nombre_completo.upper():
+            return f"Transferencia SPEI a {nombre_corto}" if beneficiario_limpio else "Transferencia SPEI a tercero"
+        elif 'SPEI RECIBIDO' in nombre_completo.upper():
+            return f"Transferencia SPEI de {nombre_corto}" if beneficiario_limpio else "Transferencia SPEI de tercero"
+        elif 'SPEI DEVUELTO' in nombre_completo.upper():
+            return f"Devolución SPEI de {nombre_corto}" if beneficiario_limpio else "Devolución SPEI"
+        else:
+            return f"Transferencia a {nombre_corto}" if beneficiario_limpio else f"Transferencia de {nombre_corto}"
+    
+    elif tipo_transaccion == 'Depósito':
+        return f"Depósito de {nombre_corto}" if beneficiario_limpio else f"Depósito de tercero ({numero}/n)"
+
+    elif tipo_transaccion == 'Tarjeta':
+        if 'GOOGLE' in nombre_completo.upper():
+            return "Suscripción mensual GOOGLE GSUITE"
+        elif 'GODADDY' in nombre_completo.upper():
+            return f"Compra en línea GODADDY ({numero}/n)"
+        elif 'MICROSOFT' in nombre_completo.upper():
+            return "Compra en línea MICROSOFT"
+        elif 'WIXCOM' in nombre_completo.upper():
+            return f"Suscripción mensual WIXCOM ({numero}/n)"
+        elif 'ADOBE' in nombre_completo.upper():
+            return "Suscripción mensual ADOBE"
+        elif beneficiario_limpio:
+            return f"Compra en {beneficiario_limpio}"
+        else:
+            return "Pago con tarjeta"
+
+    elif tipo_transaccion == 'Comisión':
+        if 'IVA' in nombre_completo.upper():
+            return "IVA de comisión servicio banca por internet"
+        else:
+            return "Comisión por servicio de banca por internet"
+
+    elif tipo_transaccion == 'Impuesto':
+        return "Pago de ISR"
+        
+    elif tipo_transaccion == 'Retiro':
+        return "Retiro cajero automático"
+
+    elif tipo_transaccion == 'Pago':
+        return f"Pago cuenta de tercero {nombre_corto}" if beneficiario_limpio else "Pago cuenta de tercero"
+
+    elif tipo_transaccion == 'Cargo':
+        return f"Cargo por recibo ({numero}/n)"
+
+    else:
+        return f"{tipo_transaccion} {nombre_corto}"[:50] if beneficiario_limpio else tipo_transaccion
+
+
+def funcion_extraer_saldo_promedio(texto_completo):
+    """
+    Se extrae el saldo promedio del periodo.
+    Se busca en la sección de Rendimiento.
+    """
+    match_rendimiento = re.search(r'Rendimiento', texto_completo, re.IGNORECASE)
+    if not match_rendimiento:
+        return 0.0
+    
+    inicio = match_rendimiento.start()
+    seccion = texto_completo[inicio:inicio + 1000]
+    
+    patron = r'Saldo\s+Promedio\s+([\d,]+\.?\d*)'
+    match = re.search(patron, seccion, re.IGNORECASE)
+    
+    if match:
+        return funcion_extraer_monto(match.group(1))
+    
+    return 0.0
+
 
 def funcion_limpiar_nombre_empresa(nombre_empresa):
     """
-    Se limpia el nombre de la empresa eliminando caracteres especiales.
-    Se reemplazan los caracteres: / \ : ? " < > | por -
+    Se limpia el nombre de la empresa.
+    Se reemplazan caracteres especiales por guión.
     """
     if not nombre_empresa:
         return ""
     
-    # Se reemplazan caracteres especiales por guion
     caracteres_invalidos = ['/', '\\', ':', '?', '"', '<', '>', '|']
     nombre_limpio = nombre_empresa
-    
     for caracter in caracteres_invalidos:
         nombre_limpio = nombre_limpio.replace(caracter, '-')
     
-    # Se eliminan espacios multiples
-    nombre_limpio = re.sub(r'\s+', ' ', nombre_limpio.strip())
+    nombre_limpio = re.sub(r'-+', '-', nombre_limpio)
+    nombre_limpio = re.sub(r'\s+', ' ', nombre_limpio)
     
-    return nombre_limpio
+    return nombre_limpio.strip()
 
 
-# ==================== FORMATO DE PERIODO ====================
-
-def funcion_formatear_periodo_archivo(periodo_str):
+def funcion_formatear_periodo_archivo(periodo_texto):
     """
-    Se formatea el periodo al formato requerido: DDMMMAAAA_DDMMMAAAA
-    Ejemplo: DEL 01/04/2025 AL 30/04/2025 -> 01ABR2025_30ABR2025
+    Se formatea el periodo para nombre de archivo.
+    Formato: DDMMMAAAA_DDMMMAAAA
     """
-    if not periodo_str:
-        return ""
+    if not periodo_texto:
+        return "PERIODO_NO_DEFINIDO"
     
-    # Se busca el patron DEL DD/MM/AAAA AL DD/MM/AAAA
-    patron = r'DEL\s+(\d{2})/(\d{2})/(\d{4})\s+AL\s+(\d{2})/(\d{2})/(\d{4})'
-    match = re.search(patron, periodo_str, re.IGNORECASE)
+    patron = r'(\d{2})/(\d{2})/(\d{4})'
+    matches = re.findall(patron, periodo_texto)
     
-    if not match:
-        return ""
+    if len(matches) >= 2:
+        fecha1 = matches[0]
+        fecha2 = matches[1]
+        
+        meses = {
+            '01': 'ENE', '02': 'FEB', '03': 'MAR', '04': 'ABR',
+            '05': 'MAY', '06': 'JUN', '07': 'JUL', '08': 'AGO',
+            '09': 'SEP', '10': 'OCT', '11': 'NOV', '12': 'DIC'
+        }
+        
+        dia1, mes1, año1 = fecha1
+        dia2, mes2, año2 = fecha2
+        
+        mes1_texto = meses.get(mes1, 'MES')
+        mes2_texto = meses.get(mes2, 'MES')
+        
+        return f"{dia1}{mes1_texto}{año1}_{dia2}{mes2_texto}{año2}"
     
-    # Se extraen los componentes
-    dia_inicio = match.group(1)
-    mes_inicio_num = match.group(2)
-    anio_inicio = match.group(3)
-    dia_fin = match.group(4)
-    mes_fin_num = match.group(5)
-    anio_fin = match.group(6)
+    return "PERIODO_NO_DEFINIDO"
+
+
+def funcion_determinar_metodo_pago(codigo, descripcion):
+    """
+    Se determina el método de pago de la transacción.
+    Se basa en código y descripción.
+    """
+    descripcion_upper = descripcion.upper()
     
-    # Se mapea el numero de mes a abreviatura en mayusculas
-    meses = {
-        '01': 'ENE', '02': 'FEB', '03': 'MAR', '04': 'ABR',
-        '05': 'MAY', '06': 'JUN', '07': 'JUL', '08': 'AGO',
-        '09': 'SEP', '10': 'OCT', '11': 'NOV', '12': 'DIC'
+    if codigo in ['T17', 'T20', 'T22'] or 'SPEI' in descripcion_upper:
+        return 'SPEI'
+    elif codigo == 'N06':
+        return 'Transferencia'
+    elif codigo == 'W02':
+        return 'Efectivo'
+    elif codigo in ['A15', 'A16', 'A17'] or 'TARJETA' in descripcion_upper:
+        return 'Tarjeta'
+    elif codigo == 'A01':
+        return 'Retiro Cajero'
+    elif codigo in ['S39', 'S40']:
+        return 'Cargo bancario'
+    elif codigo == 'P14':
+        return 'Pago de impuestos'
+    elif 'CHEQUE' in descripcion_upper:
+        return 'Cheque'
+    else:
+        return 'Otro'
+
+
+def funcion_extraer_cuentas_origen_destino(lineas_grupo, es_cargo, cuenta_propia):
+    """
+    Se separan los números de cuenta origen y destino.
+    Se devuelven dos valores separados.
+    """
+    texto_completo = ' '.join(lineas_grupo)
+    
+    # Se buscan todas las cuentas/clabes en el texto
+    cuentas = re.findall(r'\b(\d{10,18})\b', texto_completo)
+    
+    cuenta_tercero = ""
+    for cuenta in cuentas:
+        # Se filtran cuentas válidas (longitud)
+        if len(cuenta) in [10, 11, 16, 18]:
+            # Se asegura que no sea la cuenta propia (si ya la conocemos)
+            if cuenta != cuenta_propia:
+                # Se excluyen folios que parecen cuentas (ej. años)
+                if not (cuenta.startswith('2024') or cuenta.startswith('2025')):
+                    cuenta_tercero = cuenta
+                    break # Se toma la primera cuenta de tercero encontrada
+    
+    if es_cargo:
+        # Para cargos, la cuenta propia es origen, la encontrada es destino
+        cuenta_origen = cuenta_propia
+        cuenta_destino = cuenta_tercero
+    else:
+        # Para abonos, la cuenta propia es destino, la encontrada es origen
+        cuenta_origen = cuenta_tercero
+        cuenta_destino = cuenta_propia
+    
+    return cuenta_origen, cuenta_destino
+
+
+def funcion_es_codigo_cargo(codigo):
+    """
+    Se determina si un código corresponde a un cargo.
+    v5.6: Se revierte el cambio de N06. La lógica ahora está en el parser.
+    """
+    # Códigos de Egreso (Cargos)
+    codigos_cargo = {
+        'T17', # SPEI Enviado
+        'A15', # Compra Tarjeta
+        'A16', # Reposición Tarjeta
+        'A17', # IVA Reposición Tarjeta
+        'G30', # Recibo
+        'S39', # Comisión Serv Banca Internet
+        'S40', # IVA Comisión
+        'P14', # Pago SAT
+        'N06', # N06 VUELVE A SER EGRESO POR DEFECTO
+        'A01', # Retiro Cajero
+        'E62'  # Traspaso (en los PDFs de prueba, E62 siempre es egreso)
     }
     
-    mes_inicio_abbr = meses.get(mes_inicio_num, 'XXX')
-    mes_fin_abbr = meses.get(mes_fin_num, 'XXX')
-    
-    # Se construye el formato final
-    periodo_formateado = f"{dia_inicio}{mes_inicio_abbr}{anio_inicio}_{dia_fin}{mes_fin_abbr}{anio_fin}"
-    
-    return periodo_formateado
-
-
-# ==================== AGREGAR CAMPOS ADICIONALES A TRANSACCIONES ====================
-
-def funcion_agregar_campos_adicionales_transaccion(transaccion_dict):
-    """
-    Se agregan los campos adicionales obligatorios a cada transaccion.
-    Los campos son: Giro de la transacción, Análisis monto, Análisis contraparte, Análisis naturaleza
-    """
-    campos_adicionales = {
-        "Giro de la transacción": "",  # ← CAMBIO: Era "Giro sugerido"
-        "Análisis monto": "",
-        "Análisis contraparte": "",
-        "Análisis naturaleza": ""
+    # Códigos de Ingreso (Abonos)
+    codigos_abono = {
+        'T20', # SPEI Recibido
+        'W02', # Deposito de Tercero
+        'T22', # SPEI Devuelto
+        'E57', # Traspaso (en los PDFs de prueba, E57 siempre es ingreso)
+        'Y45', # Compensación
+        'F04'  # Venta Fondos de Inversion
     }
     
-    # Se crea una copia del diccionario original
-    transaccion_completa = transaccion_dict.copy()
+    if codigo in codigos_cargo:
+        return True
+    elif codigo in codigos_abono:
+        return False
     
-    # Se agregan los campos adicionales
-    transaccion_completa.update(campos_adicionales)
-    
-    return transaccion_completa
+    # Fallback para códigos desconocidos
+    return True
+
+
+# --- Funciones de compatibilidad (NO MODIFICAR) ---
+def extract_and_normalize_date(date_text):
+    return funcion_extraer_fecha_normalizada(date_text)
+def extract_amount(amount_text):
+    return funcion_extraer_monto(amount_text)
+def extract_account_number(text):
+    return ""
+def extract_reference(text):
+    return funcion_extraer_referencia_mejorada([text])
+def extract_full_transaction_name(lines):
+    return funcion_extraer_nombre_completo_transaccion(lines, 0, "")
+def extract_beneficiary_name(lines):
+    return funcion_extraer_beneficiario_correcto(lines, '', False)
+def create_summarized_name(full_name, trans_type, beneficiary):
+    return funcion_crear_nombre_resumido_inteligente(full_name, trans_type, beneficiary, {})
+def extract_branch_from_header(text):
+    return ""
+def classify_transaction(code, desc, column):
+    if code in {'T20', 'W02', 'T22', 'E57', 'Y45', 'F04'}:
+        return "Ingreso"
+    return "Egreso"

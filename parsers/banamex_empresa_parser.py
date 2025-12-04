@@ -376,4 +376,4 @@ def funcion_validar_balance_transacciones(transacciones, metadatos):
     if abs(ing - dep_meta) < 5.0 and abs(egr - ret_meta) < 5.0:
         print("✓ Balance Validado")
     else:
-        print(f"⚠️ Diferencia en balance (Meta: +{dep_meta:,.2f} | -{ret_meta:,.2f})")
+        print(f"Diferencia en balance (Meta: +{dep_meta:,.2f} | -{ret_meta:,.2f})")

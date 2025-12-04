@@ -328,7 +328,6 @@ def funcion_encontrar_seccion_movimientos(texto):
 def _es_linea_beneficiario(linea):
     """
     Se determina si una línea es un nombre de beneficiario.
-    (Ej. "JEAN EMMANUEL ABONCE LEAL" o "Enrique Color")
     """
     linea_limpia = linea.strip()
     if not linea_limpia:

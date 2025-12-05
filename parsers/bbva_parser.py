@@ -84,11 +84,8 @@ def funcion_parsear_bbva_empresa(texto_completo, datos_ocr=None):
 def funcion_extraer_metadatos_completos(texto):
     """
     Se extraen todos los metadatos del estado de cuenta BBVA.
-    Se devuelve diccionario con estructura objetivo completa.
-    
-    MEJORA v6.0: Algoritmo de detección de nombre basado en estructura y regex extendido.
+    Se utiliza logica de limites para el nombre de la empresa.
     """
-    # Se inicializa diccionario de metadatos
     datos_raw = {
         'nombre_empresa': '',
         'periodo': '',
@@ -102,57 +99,8 @@ def funcion_extraer_metadatos_completos(texto):
         'sucursal': ''
     }
     
-    lineas = texto.split('\n')
-    
-    # --- EXTRACCIÓN MEJORADA DEL NOMBRE DE LA EMPRESA (v6.0) ---
-    nombre_encontrado = ""
-    
-    # ESTRATEGIA 1: Búsqueda Estructural (La más precisa para IAM y SOWILO)
-    # En BBVA, el nombre suele estar justo debajo de la línea que dice solamente "BBVA"
-    # Se ignoran páginas de advertencia (RFC genérico).
-    for i, linea in enumerate(lineas[:80]): # Buscamos en las primeras 80 líneas (cubre pág 1 y 2)
-        linea_limpia = linea.strip()
-        
-        # Detectamos la marca BBVA sola
-        if linea_limpia == 'BBVA':
-            # Verificamos la siguiente línea con contenido
-            if i + 1 < len(lineas):
-                siguiente_linea = lineas[i+1].strip()
-                
-                # Filtros para descartar basura o páginas de aviso
-                es_aviso = any(x in siguiente_linea.upper() for x in [
-                    'RECIBISTE TU ESTADO', 'RFC GENÉRICO', 'CONSTANCIA DE', 
-                    'DATOS FISCALES', 'GLOSARIO', 'ESTADO DE CUENTA'
-                ])
-                
-                # Si la siguiente línea es válida, es el nombre
-                if siguiente_linea and not es_aviso and len(siguiente_linea) > 5:
-                    # Validación extra: no debe empezar con números (dirección)
-                    if not siguiente_linea[0].isdigit():
-                        nombre_encontrado = siguiente_linea
-                        print(f"  > Nombre detectado por estructura: {nombre_encontrado}")
-                        break
-
-    # ESTRATEGIA 2: Búsqueda por Regex Ampliada (Fallback)
-    # Si la estructura falla, buscamos por sufijos legales ampliados
-    if not nombre_encontrado:
-        patron_empresa = re.compile(
-            r'.*\b(SA DE CV|S\.A\.|SOCIEDAD|SC|S\.C\.|A\.C\.|S\.A\.B|LTD|INC|GRUPO|INSTITUTO|ASOCIACION|COLEGIO)\b.*', 
-            re.IGNORECASE
-        )
-        
-        for linea in lineas[:60]:
-            if patron_empresa.search(linea):
-                # Filtros de exclusión
-                if not any(x in linea.upper() for x in ['BBVA', 'BANCOMER', 'SUCURSAL', 'DIRECCION', 'CALLE', 'COL.', 'MEXICO', 'RFC', 'PAGINA']):
-                    if len(linea.strip()) > 5:
-                        nombre_encontrado = linea.strip()
-                        print(f"  > Nombre detectado por Regex: {nombre_encontrado}")
-                        break
-    
-    datos_raw['nombre_empresa'] = nombre_encontrado if nombre_encontrado else "EMPRESA NO IDENTIFICADA"
-    
-    # --- FIN EXTRACCIÓN NOMBRE ---
+    # Se extrae el nombre utilizando la nueva logica robusta
+    datos_raw['nombre_empresa'] = _extraer_nombre_inteligente(texto)
 
     # Se extrae el periodo
     patron_periodo = re.compile(
@@ -163,7 +111,7 @@ def funcion_extraer_metadatos_completos(texto):
     if match_periodo:
         datos_raw['periodo'] = f"DEL {match_periodo.group(1)} AL {match_periodo.group(2)}"
     
-    # Se extrae el número de cuenta
+    # Se extrae el numero de cuenta
     patron_cuenta = re.compile(r'No\.\s*de\s*Cuenta\s+(\d{10})', re.IGNORECASE)
     match_cuenta = patron_cuenta.search(texto)
     if match_cuenta:
@@ -181,7 +129,7 @@ def funcion_extraer_metadatos_completos(texto):
     if match_sucursal:
         datos_raw['sucursal'] = match_sucursal.group(1)
     
-    # Se extraen los datos financieros usando función robusta (v5.1)
+    # Se extraen los datos financieros usando funcion robusta
     funcion_extraer_datos_financieros_robustos(texto, datos_raw)
     
     # Se extrae el saldo promedio
@@ -193,7 +141,7 @@ def funcion_extraer_metadatos_completos(texto):
     # Se formatea el periodo para nombre de archivo
     periodo_formateado = funcion_formatear_periodo_archivo(datos_raw['periodo'])
     
-    # Se convierten valores a números
+    # Se convierten valores a numeros
     saldo_inicial = float(datos_raw.get('saldo_inicial', 0))
     saldo_final = float(datos_raw.get('saldo_final', 0))
     total_depositos = float(datos_raw.get('total_depositos', 0))
@@ -213,7 +161,7 @@ def funcion_extraer_metadatos_completos(texto):
         "Giro de la empresa": ""
     }
     
-    # Se almacena información auxiliar para uso interno
+    # Se almacena informacion auxiliar para uso interno
     metadatos_objetivo['_auxiliar'] = {
         'periodo_original': datos_raw['periodo'],
         'sucursal': datos_raw['sucursal'],
@@ -221,6 +169,89 @@ def funcion_extraer_metadatos_completos(texto):
     }
     
     return metadatos_objetivo
+
+def _extraer_nombre_inteligente(texto):
+    """
+    Logica mejorada para extraer el nombre de la empresa.
+    Define limites superior e inferior y filtra lineas por contenido no deseado.
+    """
+    lineas = texto.split('\n')
+    
+    # Se definen indices de busqueda
+    idx_inicio = 0
+    idx_fin = min(len(lineas), 100)  # Se busca solo en las primeras lineas
+    
+    # Se busca limite superior (Marca del banco)
+    for i in range(20):  # Se busca BBVA solo al principio
+        linea_limpia = lineas[i].strip().upper()
+        if 'BBVA' in linea_limpia or 'BANCOMER' in linea_limpia:
+            idx_inicio = i + 1
+            break
+            
+    # Se busca limite inferior (Inicio de seccion financiera o direccion)
+    patrones_fin = [
+        r'INFORMACI[ÓO]N\s+FINANCIERA',
+        r'ESTADO\s+DE\s+CUENTA',
+        r'PERIODO',
+        r'FECHA\s+DE\s+CORTE',
+        r'RESUMEN\s+DE\s+SALDOS'
+    ]
+    
+    for i in range(idx_inicio, idx_fin):
+        linea = lineas[i].strip().upper()
+        for patron in patrones_fin:
+            if re.search(patron, linea):
+                idx_fin = i
+                break
+        if idx_fin != 100:
+            break
+            
+    # Se recolectan candidatos entre los limites
+    candidatos = []
+    for i in range(idx_inicio, idx_fin):
+        linea = lineas[i].strip()
+        if not linea:
+            continue
+            
+        linea_upper = linea.upper()
+        
+        # Filtros de exclusion estricta
+        if any(x in linea_upper for x in [
+            'RFC GENERICO', 'RECIBISTE TU ESTADO', 'CONSTANCIA DE SITUACION',
+            'DATOS FISCALES', 'REGIMEN FISCAL', 'DIRECCION', 'SUCURSAL', 
+            'PAGINA', 'HOJA', 'FOLIO', 'CLIENTE'
+        ]):
+            continue
+            
+        # Filtro de direccion (si empieza con numero o tiene CP)
+        if re.match(r'^\d+', linea) or ' C.P. ' in linea or ' CP ' in linea:
+            continue
+            
+        # Filtro de longitud minima
+        if len(linea) < 4:
+            continue
+            
+        candidatos.append(linea)
+    
+    # Se selecciona el mejor candidato
+    if candidatos:
+        # Se prioriza el primero que parezca razon social
+        for cand in candidatos:
+            if re.search(r'\b(SA DE CV|S\.A\.|S\.C\.|SOCIEDAD|ASOCIACION|GRUPO|INSTITUTO)\b', cand, re.IGNORECASE):
+                return cand
+        # Si no hay razon social explicita, se devuelve el primer candidato valido (ej. nombres propios)
+        return candidatos[0]
+        
+    # Fallback: Busqueda por Regex en todo el encabezado si la estructura falla
+    bloque_header = "\n".join(lineas[:60])
+    match_fallback = re.search(r'(?m)^(.+?\b(SA DE CV|S\.A\. DE C\.V\.|S\.C\.|S\.A\.B\.|A\.C\.)\b.*)$', bloque_header)
+    if match_fallback:
+        linea_fb = match_fallback.group(1).strip()
+        # Se verifica que no sea parte de un texto legal largo
+        if len(linea_fb) < 80:
+            return linea_fb
+            
+    return "EMPRESA NO IDENTIFICADA"
 
 
 def funcion_extraer_datos_financieros_robustos(texto, metadatos):

@@ -2,6 +2,7 @@
 # Parser Banamex Empresa v9.5 FUSIONADO
 # - METADATOS (Nombre/Promedio): Lógica v9.4 (Filtros robustos + Fallback matemático).
 # - TRANSACCIONES: Lógica v9.3 (Detecta correctamente líneas de fecha/concepto).
+# - MEJORAS v9.6: Fix Numero de Cuenta y Limpieza de Montos en Descripción.
 
 import re
 import sys
@@ -40,7 +41,7 @@ def funcion_parsear_transacciones(paginas_texto, saldo_inicial):
     return funcion_extraer_todas_transacciones(texto_completo, metadatos)
 
 def funcion_parsear_banamex_empresa(texto_completo):
-    print("\n=== Iniciando Parser Banamex Empresa v9.5 (Fusión Metadatos v9.4 + Transacciones v9.3) ===")
+    print("\n=== Iniciando Parser Banamex Empresa v9.6 (Fix Cuenta y Descripciones) ===")
     
     # 1. Extraer Metadatos con la lógica v9.4 (que funciona bien para Nombre y Promedio)
     metadatos = funcion_extraer_metadatos_completos(texto_completo)
@@ -66,6 +67,7 @@ def funcion_parsear_banamex_empresa(texto_completo):
 def funcion_extraer_metadatos_completos(texto):
     """
     Lógica v9.4: Filtros de exclusión detallados para el nombre y cálculo matemático del promedio.
+    Mejorada v9.6: Extracción de cuenta más robusta.
     """
     datos = {
         'nombre_empresa': '',
@@ -162,18 +164,26 @@ def funcion_extraer_metadatos_completos(texto):
         if m_per_alt:
             datos['periodo'] = m_per_alt.group(0).replace('\n', ' ').strip()
 
-    # 3. Cuentas
-    m_clabe = re.search(r'(?:CLABE|Cuenta\s+CLABE).*?(\d{18})', texto, re.IGNORECASE | re.DOTALL)
+    # 3. Cuentas (MEJORADO v9.6)
+    # Intentar CLABE
+    m_clabe = re.search(r'(?:CLABE|Cuenta\s+CLABE)\D*?(\d{18})', texto, re.IGNORECASE | re.DOTALL)
     if m_clabe:
         datos['numero_cuenta_clabe'] = m_clabe.group(1)
-        
-    m_cta = re.search(r'Cuenta\s+de\s+Cheques(?:[^0-9]{0,50}?)(\d{10})(?!\d)', texto, re.IGNORECASE | re.DOTALL)
-    if m_cta:
-        datos['numero_cuenta'] = m_cta.group(1)
+    
+    # Intentar Cuenta Eje (Patrón específico de Banamex)
+    m_cta_eje = re.search(r'Cuenta\s+Eje\s+para\s+Cargos\s+y\s+Abonos\s+(?:CH\s+\d{3,4}/)?(\d{10,11})', texto, re.IGNORECASE)
+    if m_cta_eje:
+        datos['numero_cuenta'] = m_cta_eje.group(1)
     else:
-        m_cta_alt = re.search(r'CONTRATO\s+[:\.]?\s*(\d{10})', texto, re.IGNORECASE)
-        if m_cta_alt:
-            datos['numero_cuenta'] = m_cta_alt.group(1)
+        # Patrón general robusto
+        m_cta = re.search(r'Cuenta\s+de\s+Cheques\D*?(\d{10,11})(?!\d)', texto, re.IGNORECASE | re.DOTALL)
+        if m_cta:
+            datos['numero_cuenta'] = m_cta.group(1)
+        else:
+            # Fallback a Contrato si no encuentra cuenta
+            m_cta_alt = re.search(r'CONTRATO\s*[:\.]?\s*(\d{10,11})', texto, re.IGNORECASE)
+            if m_cta_alt:
+                datos['numero_cuenta'] = m_cta_alt.group(1)
 
     # 4. Saldos
     bloque_resumen = texto[:4000]
@@ -283,7 +293,7 @@ def funcion_agrupar_lineas_por_fecha(lineas):
     return grupos
 
 def funcion_procesar_grupo_transaccion(lineas, anio, contador, cuenta_propia):
-    # Lógica v9.3
+    # Lógica v9.6 (Fix descripción con montos)
     bloque_texto = " ".join(lineas)
     
     # 1. Fecha
@@ -294,31 +304,47 @@ def funcion_procesar_grupo_transaccion(lineas, anio, contador, cuenta_propia):
     fecha_str = f"{fecha_raw}/{anio}".replace(" ", "/")
     fecha = funcion_extraer_fecha_normalizada(fecha_str)
     
-    # 2. Montos
-    montos = re.findall(r'([\d,]+\.\d{2})', bloque_texto)
+    # 2. Montos (Estrategia mejorada v9.6)
+    # Buscamos todos los posibles montos al final.
+    montos = re.findall(r'(\d{1,3}(?:,\d{3})*\.\d{2})', bloque_texto)
     monto = 0.0
+    texto_analisis = bloque_texto
     
     if len(montos) >= 2:
-        monto = funcion_extraer_monto(montos[-2])
-        texto_analisis = bloque_texto.replace(montos[-1], "").replace(montos[-2], "")
+        # Asumimos que el último es Saldo y el penúltimo es el Monto de la transacción.
+        monto_str = montos[-2]
+        saldo_str = montos[-1]
+        monto = funcion_extraer_monto(monto_str)
+        
+        # Limpiar AMBOS montos del texto para que no queden en la descripción.
+        # Usamos replace(..., 1) de derecha a izquierda (reverse) idealmente, pero simple replace
+        # puede ser peligroso si el monto se repite en el concepto.
+        # Sin embargo, para este caso, eliminar la cadena exacta suele funcionar.
+        texto_analisis = texto_analisis.replace(saldo_str, "", 1).replace(monto_str, "", 1)
+        
     elif len(montos) == 1:
-        monto = funcion_extraer_monto(montos[0])
-        texto_analisis = bloque_texto.replace(montos[0], "")
+        # Solo hay un monto (posiblemente solo el de la transacción y no el saldo)
+        monto_str = montos[0]
+        monto = funcion_extraer_monto(monto_str)
+        texto_analisis = texto_analisis.replace(monto_str, "", 1)
     else:
         return None 
         
     # 3. Clasificación
-    es_egreso = _determinar_clasificacion(texto_analisis)
+    es_egreso = _determinar_clasificacion(bloque_texto) # Usar bloque completo para contexto
     clasificacion = "Egreso" if es_egreso else "Ingreso"
     
-    # 4. Descripción y Nombre Completo
-    desc_base = texto_analisis[len(fecha_raw):].strip()
-    nombre_completo = funcion_extraer_nombre_completo_transaccion(lineas, 0, desc_base)
+    # 4. Descripción y Nombre Completo (Limpieza final v9.6)
+    # Quitar la fecha del inicio
+    desc_base = re.sub(r'^' + re.escape(fecha_raw), '', texto_analisis, flags=re.IGNORECASE).strip()
+    
+    # Quitar espacios dobles y basura residual
+    nombre_completo = re.sub(r'\s+', ' ', desc_base).strip()
     
     # 5. Beneficiario
     beneficiario = funcion_extraer_beneficiario_correcto(lineas, "", es_egreso)
     if not beneficiario:
-        beneficiario = _extraer_beneficiario_banamex_legacy(desc_base)
+        beneficiario = _extraer_beneficiario_banamex_legacy(nombre_completo)
 
     # 6. Referencia
     referencia = funcion_extraer_referencia_mejorada(lineas)

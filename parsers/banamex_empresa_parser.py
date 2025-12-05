@@ -1,16 +1,12 @@
 # -*- coding: utf-8 -*-
-"""
-Parser Banamex Empresa v9.3 CORREGIDO
-- CORRECCIÓN NOMBRE: Filtros anti-leyenda legal.
-- CORRECCIÓN CLASIFICACIÓN: Lógica estricta Ingreso vs Egreso.
-- CORRECCIÓN SALDO PROMEDIO: Extracción específica + Fallback matemático.
-"""
+# Parser Banamex Empresa v9.5 FUSIONADO
+# - METADATOS (Nombre/Promedio): Lógica v9.4 (Filtros robustos + Fallback matemático).
+# - TRANSACCIONES: Lógica v9.3 (Detecta correctamente líneas de fecha/concepto).
 
 import re
 import sys
 import os
 
-# Asegurar importación de utilidades compartidas (IGUAL QUE BBVA)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.field_extractors import (
     funcion_extraer_fecha_normalizada,
@@ -28,9 +24,6 @@ from utils.field_extractors import (
 )
 from utils.validators import limpiar_monto
 
-# =============================================================================
-# PATRONES ESPECÍFICOS DE BANAMEX
-# =============================================================================
 PATRONES_SALDO_FINAL = [
     r'SALDO AL \d{2} DE [A-Z]+ DE \d{4}\s+([$]?[\d,]+\.\d{2})',
     r'SALDO AL CORTE.*?([$]?[\d,]+\.\d{2})',
@@ -38,32 +31,30 @@ PATRONES_SALDO_FINAL = [
 ]
 
 def funcion_parsear_datos_generales(paginas_texto):
-    """Función de compatibilidad."""
     texto_completo = "\n".join(paginas_texto)
     return funcion_extraer_metadatos_completos(texto_completo)
 
 def funcion_parsear_transacciones(paginas_texto, saldo_inicial):
-    """Función de compatibilidad."""
     texto_completo = "\n".join(paginas_texto)
     metadatos = funcion_extraer_metadatos_completos(texto_completo)
     return funcion_extraer_todas_transacciones(texto_completo, metadatos)
 
 def funcion_parsear_banamex_empresa(texto_completo):
-    """
-    Parser principal Banamex Empresa.
-    Estructura idéntica al parser de BBVA.
-    """
-    print("\n=== Iniciando Parser Banamex Empresa v9.3 (Fix Nombre/Saldo/Clasif) ===")
+    print("\n=== Iniciando Parser Banamex Empresa v9.5 (Fusión Metadatos v9.4 + Transacciones v9.3) ===")
     
+    # 1. Extraer Metadatos con la lógica v9.4 (que funciona bien para Nombre y Promedio)
     metadatos = funcion_extraer_metadatos_completos(texto_completo)
     
     nombre = metadatos.get("Nombre de la empresa del estado de cuenta", "DESCONOCIDO")
     periodo = metadatos.get("Periodo del estado de cuenta", "DESCONOCIDO")
-    print(f"✓ Metadatos extraídos: '{nombre}'")
-    print(f"✓ Período detectado: '{periodo}'")
+    promedio = metadatos.get("Saldo promedio del periodo", 0.0)
+    print(f"  Metadatos extraidos: '{nombre}'")
+    print(f"  Periodo detectado: '{periodo}'")
+    print(f"  Saldo Promedio: {promedio}")
     
+    # 2. Extraer Transacciones con la lógica v9.3 (que funciona bien para este PDF)
     transacciones = funcion_extraer_todas_transacciones(texto_completo, metadatos)
-    print(f"✓ Transacciones extraídas: {len(transacciones)}")
+    print(f"  Transacciones extraidas: {len(transacciones)}")
     
     funcion_validar_balance_transacciones(transacciones, metadatos)
     
@@ -74,8 +65,7 @@ def funcion_parsear_banamex_empresa(texto_completo):
 
 def funcion_extraer_metadatos_completos(texto):
     """
-    Extrae metadatos generales usando las mismas funciones de limpieza que BBVA.
-    MEJORA v9.3: Filtros adicionales para ignorar 'Fecha de corte' como nombre.
+    Lógica v9.4: Filtros de exclusión detallados para el nombre y cálculo matemático del promedio.
     """
     datos = {
         'nombre_empresa': '',
@@ -92,87 +82,71 @@ def funcion_extraer_metadatos_completos(texto):
     
     lineas = texto.split('\n')
     
-    # --- 1. Nombre Empresa (Lógica Mejorada v9.3) ---
+    # 1. Nombre Empresa - Lógica v9.4
     nombre_encontrado = ""
     
-    # ESTRATEGIA A: Búsqueda Estructural por Ancla "GAT Real / Inflación"
-    idx_ancla = -1
+    # ESTRATEGIA PRINCIPAL: Buscar directamente lineas con patron de razon social
     for i, linea in enumerate(lineas[:80]):
-        if "descontar la inflación estimada" in linea.lower() or "gat real es el rendimiento" in linea.lower():
-            idx_ancla = i
+        l = linea.strip()
+        if len(l) < 5:
+            continue
+        
+        # Filtros de exclusion v9.4
+        filtros_exclusion = [
+            'BANAMEX', 'SUCURSAL', 'RFC', 'CLIENTE', 'PAGINA', 'ESTADO DE CUENTA',
+            'ACTUARIO', 'SANTA FE', 'COL.', 'C.P.', 'CIUDAD DE MEXICO', 'CALLE',
+            'AVENIDA', 'TORRE', 'INFLACION', 'ESTIMADA', 'DESCONTAR', 'RENDIMIENTO',
+            'FECHA DE CORTE', 'LEYENDA', 'GAT', 'OBTENDRIA', 'IMPUESTOS',
+            'SALVO QUE', 'EXPRESAMENTE', 'DETERMINE', 'MONEDA', 'CIFRAS',
+            'CONTENIDAS', 'PESOS', 'NACIONAL', 'INDICADA', 'CORTE ES LA',
+            'RESUMEN', 'PRODUCTO', 'SERVICIO', 'CONTRATO', 'CLABE', 'INVERSION'
+        ]
+        
+        # Verificar si la linea contiene palabras prohibidas
+        tiene_exclusion = any(x in l.upper() for x in filtros_exclusion)
+        if tiene_exclusion:
+            continue
+        
+        # Buscar patron de razon social mexicana
+        if re.search(r'\b(SA DE CV|S\.A\. DE C\.V\.|S\.A\.|S\.C\.|SOCIEDAD|ASOCIACION|INMOVITUR|SC DE RL|S\.A\.B\.)\b', l, re.IGNORECASE):
+            nombre_encontrado = l
+            print(f"  > Nombre detectado por patron razon social: {nombre_encontrado}")
             break
-            
-    if idx_ancla != -1:
-        for j in range(1, 6): # Buscamos un poco más abajo
-            if idx_ancla + j < len(lineas):
-                linea_candidata = lineas[idx_ancla + j].strip()
-                
-                if linea_candidata and len(linea_candidata) > 3 and not re.match(r'^\$?\d', linea_candidata):
-                    
-                    # Filtros de exclusión MEJORADOS v9.3
-                    palabras_prohibidas = [
-                        'CALLE', 'AV.', 'AVENIDA', 'COL.', 'C.P.', 'CP ', 'DELEGACION', 'MUNICIPIO', 'SUCURSAL',
-                        'INFLACION', 'ESTIMADA', 'DESCONTAR', 'RENDIMIENTO', 'GAT', 'OBTENDRIA', 'IMPUESTOS',
-                        # Nuevos filtros específicos para tu error:
-                        'FECHA DE CORTE', 'LEYENDA', 'ESTADO DE CUENTA', 'INDICADA'
-                    ]
-                    
-                    if not any(x in linea_candidata.upper() for x in palabras_prohibidas):
-                         nombre_encontrado = linea_candidata
-                         print(f"  > Nombre detectado por estructura (GAT): {nombre_encontrado}")
-                         break
-
-    # ESTRATEGIA B: Búsqueda por Ancla "CLIENTE:"
+    
+    # ESTRATEGIA SECUNDARIA: Buscar despues de "CLIENTE:" si no se encontro
     if not nombre_encontrado:
         for i, linea in enumerate(lineas[:50]):
             if "CLIENTE:" in linea.upper():
-                for k in range(1, 10): 
+                # Buscar en las siguientes lineas
+                for k in range(1, 15):
                     if i + k < len(lineas):
-                        l = lineas[i+k].strip()
-                        if not l: continue
-                        if l.isdigit(): continue
-                        if "RFC" in l.upper() or "PÁGINA" in l.upper() or "SUC." in l.upper(): continue
-                        if "CUENTA DE CHEQUES" in l.upper() or "MONEDA NACIONAL" in l.upper(): continue
-                        if "GAT" in l.upper() or "INTERÉS" in l.upper() or "COMISIONES" in l.upper(): continue
-                        if "INFLACION" in l.upper() or "ESTIMADA" in l.upper(): continue
-                        # Filtro extra v9.3
-                        if "FECHA DE CORTE" in l.upper(): continue
-
-                        if len(l) > 5 and not any(x in l.upper() for x in ['CALLE', 'AVENIDA', 'COL.']):
-                             if re.search(r'\b(SA DE CV|S\.A\.|S\.C\.|SOCIEDAD|ASOCIACION|GRUPO|CORPORATIVO|INMOVITUR|SC DE RL)\b', l, re.IGNORECASE):
-                                 nombre_encontrado = l
-                                 print(f"  > Nombre detectado por estructura (Cliente): {nombre_encontrado}")
-                                 break
-                if nombre_encontrado: break
-
-    # ESTRATEGIA C: Regex (Fallback original)
-    if not nombre_encontrado:
-        candidatos_nombre = []
-        for linea in lineas[:60]:
-            l = linea.strip()
-            if len(l) < 5: continue
-            
-            filtros = ['BANAMEX', 'SUCURSAL', 'RFC', 'CLIENTE', 'PÁGINA', 'ESTADO DE CUENTA', 'ACTUARIO', 
-                       'SANTA FE', 'COL.', 'C.P.', 'CIUDAD DE MEXICO', 'CALLE', 'AVENIDA', 'TORRE',
-                       'INFLACION', 'ESTIMADA', 'DESCONTAR', 'RENDIMIENTO', 
-                       'FECHA DE CORTE', 'LEYENDA'] # Filtro agregado
-            
-            if any(x in l.upper() for x in filtros): 
-                continue
-            
-            if re.search(r'\b(SA DE CV|S\.A\.|S\.C\.|SOCIEDAD|ASOCIACION|GRUPO|CORPORATIVO|INMOVITUR|SC DE RL|S\.A\.B\.)\b', l, re.IGNORECASE):
-                nombre_encontrado = l
-                break
-            
-            if l.isupper() and not re.search(r'\d', l):
-                candidatos_nombre.append(l)
-                
-        if not nombre_encontrado and candidatos_nombre:
-            nombre_encontrado = candidatos_nombre[0]
+                        l = lineas[i + k].strip()
+                        if not l or len(l) < 5:
+                            continue
+                        if l.isdigit():
+                            continue
+                        
+                        # Mismos filtros de exclusion
+                        filtros_exclusion = [
+                            'RFC', 'PAGINA', 'SUC.', 'CUENTA DE CHEQUES', 'MONEDA',
+                            'GAT', 'INTERES', 'COMISIONES', 'INFLACION', 'ESTIMADA',
+                            'FECHA DE CORTE', 'SALVO', 'EXPRESAMENTE', 'RENDIMIENTO',
+                            'CALLE', 'AVENIDA', 'COL.', 'C.P.', 'ACTUARIO'
+                        ]
+                        
+                        if any(x in l.upper() for x in filtros_exclusion):
+                            continue
+                        
+                        if re.search(r'\b(SA DE CV|S\.A\.|S\.C\.|INMOVITUR|SC DE RL)\b', l, re.IGNORECASE):
+                            nombre_encontrado = l
+                            print(f"  > Nombre detectado despues de CLIENTE: {nombre_encontrado}")
+                            break
+                if nombre_encontrado:
+                    break
 
     datos['nombre_empresa'] = nombre_encontrado if nombre_encontrado else "EMPRESA NO IDENTIFICADA"
 
-    # 2. Periodo (Normalización avanzada para Banamex)
+    # 2. Periodo
     match_rango = re.search(r'(?:RESUMEN|PERIODO).*?(\d{2})[/. ]([A-Z]{3})[/. ](\d{4})\s+AL\s+(\d{2})[/. ]([A-Z]{3})[/. ](\d{4})', texto, re.IGNORECASE | re.DOTALL)
     if match_rango:
         try:
@@ -180,23 +154,28 @@ def funcion_extraer_metadatos_completos(texto):
             d1, m1_txt, y1 = match_rango.group(1), match_rango.group(2).upper(), match_rango.group(3)
             d2, m2_txt, y2 = match_rango.group(4), match_rango.group(5).upper(), match_rango.group(6)
             datos['periodo'] = f"DEL {d1}/{meses.get(m1_txt, '00')}/{y1} AL {d2}/{meses.get(m2_txt, '00')}/{y2}"
-        except: pass
+        except:
+            pass
     
     if not datos['periodo']:
         m_per_alt = re.search(r'DEL\s+(\d{2}\s+DE\s+[A-Z]+\s+DE\s+\d{4})\s+AL', texto, re.IGNORECASE)
-        if m_per_alt: datos['periodo'] = m_per_alt.group(0).replace('\n', ' ').strip()
+        if m_per_alt:
+            datos['periodo'] = m_per_alt.group(0).replace('\n', ' ').strip()
 
     # 3. Cuentas
     m_clabe = re.search(r'(?:CLABE|Cuenta\s+CLABE).*?(\d{18})', texto, re.IGNORECASE | re.DOTALL)
-    if m_clabe: datos['numero_cuenta_clabe'] = m_clabe.group(1)
+    if m_clabe:
+        datos['numero_cuenta_clabe'] = m_clabe.group(1)
         
     m_cta = re.search(r'Cuenta\s+de\s+Cheques(?:[^0-9]{0,50}?)(\d{10})(?!\d)', texto, re.IGNORECASE | re.DOTALL)
-    if m_cta: datos['numero_cuenta'] = m_cta.group(1)
+    if m_cta:
+        datos['numero_cuenta'] = m_cta.group(1)
     else:
         m_cta_alt = re.search(r'CONTRATO\s+[:\.]?\s*(\d{10})', texto, re.IGNORECASE)
-        if m_cta_alt: datos['numero_cuenta'] = m_cta_alt.group(1)
+        if m_cta_alt:
+            datos['numero_cuenta'] = m_cta_alt.group(1)
 
-    # 4. Saldos (Usando funcion_extraer_monto común)
+    # 4. Saldos
     bloque_resumen = texto[:4000]
     
     def buscar_monto(patron, txt):
@@ -213,18 +192,18 @@ def funcion_extraer_metadatos_completos(texto):
             datos['saldo_final'] = sf
             break
     
-    # --- CORRECCIÓN SALDO PROMEDIO (Regex + Fallback) v9.3 ---
-    # Intentar extraer explícitamente primero
-    match_prom = re.search(r'Saldo Promedio.*?([$]?[\d,]+\.\d{2})', texto, re.IGNORECASE | re.DOTALL)
+    # 5. Saldo Promedio - Lógica v9.4 (Extracción directa + Fallback matemático)
+    match_prom = re.search(r'Saldo Promedio\s+([$]?[\d,]+\.\d{2})', texto, re.IGNORECASE)
     if match_prom:
         datos['saldo_promedio'] = funcion_extraer_monto(match_prom.group(1))
+        print(f"  > Saldo Promedio extraido del PDF: {datos['saldo_promedio']}")
     
-    # Si falla la extracción (es 0), calcular matemáticamente
-    if datos['saldo_promedio'] == 0.0 and datos['saldo_inicial'] > 0:
+    # Fallback: calcular matematicamente si no se extrajo
+    if datos['saldo_promedio'] == 0.0 and (datos['saldo_inicial'] > 0 or datos['saldo_final'] > 0):
         datos['saldo_promedio'] = (datos['saldo_inicial'] + datos['saldo_final']) / 2
-        print(f"  > Saldo Promedio calculado matemáticamente: {datos['saldo_promedio']}")
+        print(f"  > Saldo Promedio calculado matematicamente: {datos['saldo_promedio']}")
 
-    # Normalización final usando funciones compartidas
+    # Normalizacion final
     return {
         "Nombre de la empresa del estado de cuenta": funcion_limpiar_nombre_empresa(datos['nombre_empresa']),
         "Numero de cuenta del estado de cuenta": datos['numero_cuenta'],
@@ -239,7 +218,7 @@ def funcion_extraer_metadatos_completos(texto):
 
 def funcion_extraer_todas_transacciones(texto, metadatos):
     """
-    Extrae transacciones y las normaliza usando el ESTÁNDAR BBVA.
+    Lógica v9.3: Algoritmo de extracción de transacciones que detecta correctamente los bloques.
     """
     # 1. Encontrar inicio
     inicio = -1
@@ -256,9 +235,9 @@ def funcion_extraer_todas_transacciones(texto, metadatos):
     
     # 3. Agrupar por fechas
     grupos = funcion_agrupar_lineas_por_fecha(texto_tabla.split('\n'))
-    print(f"✓ Bloques de movimientos encontrados: {len(grupos)}")
+    print(f"  Bloques de movimientos encontrados: {len(grupos)}")
     
-    # 4. Procesar usando funciones compartidas
+    # 4. Procesar
     transacciones = []
     contador = {}
     
@@ -276,7 +255,7 @@ def funcion_extraer_todas_transacciones(texto, metadatos):
     return transacciones
 
 def funcion_limpiar_basura_banamex(texto):
-    """Elimina texto repetitivo no deseado."""
+    # Lógica v9.3
     patrones = [
         r'citibanamex', r'Banamex', r'ESTADO DE CUENTA AL.*', r'CLIENTE:\s*\d+',
         r'Página:\s*\d+\s*de\s*\d+', r'DETALLE DE OPERACIONES', r'^\s*\d+\.[A-Z0-9\.]+\s*$'
@@ -287,7 +266,7 @@ def funcion_limpiar_basura_banamex(texto):
     return txt
 
 def funcion_agrupar_lineas_por_fecha(lineas):
-    """Agrupa líneas por fecha (DD MMM)."""
+    # Lógica v9.3
     grupos = []
     grupo_actual = []
     patron = re.compile(r'^\s*(\d{1,2}\s+(?:ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC))', re.IGNORECASE)
@@ -304,19 +283,16 @@ def funcion_agrupar_lineas_por_fecha(lineas):
     return grupos
 
 def funcion_procesar_grupo_transaccion(lineas, anio, contador, cuenta_propia):
-    """
-    Procesa una transacción usando las MISMAS funciones utilitarias que BBVA
-    para garantizar idéntica normalización.
-    """
+    # Lógica v9.3
     bloque_texto = " ".join(lineas)
     
-    # 1. Fecha (Normalización estándar)
+    # 1. Fecha
     m_fecha = re.match(r'^(\d{1,2}\s+[A-Z]{3})', lineas[0], re.IGNORECASE)
     if not m_fecha: return None
     
     fecha_raw = m_fecha.group(1)
     fecha_str = f"{fecha_raw}/{anio}".replace(" ", "/")
-    fecha = funcion_extraer_fecha_normalizada(fecha_str) # Misma función que BBVA
+    fecha = funcion_extraer_fecha_normalizada(fecha_str)
     
     # 2. Montos
     montos = re.findall(r'([\d,]+\.\d{2})', bloque_texto)
@@ -331,7 +307,7 @@ def funcion_procesar_grupo_transaccion(lineas, anio, contador, cuenta_propia):
     else:
         return None 
         
-    # 3. Clasificación (Mejorada v9.3)
+    # 3. Clasificación
     es_egreso = _determinar_clasificacion(texto_analisis)
     clasificacion = "Egreso" if es_egreso else "Ingreso"
     
@@ -405,25 +381,16 @@ def funcion_procesar_grupo_transaccion(lineas, anio, contador, cuenta_propia):
     }
 
 def _determinar_clasificacion(desc):
-    """
-    Clasifica como Ingreso o Egreso.
-    MEJORA v9.3: Orden estricto de prioridades.
-    """
+    # Lógica v9.3
     d = desc.upper()
-    
-    # 1. Ingresos explícitos (Prioridad Alta)
     if any(x in d for x in ['PAGO RECIBIDO', 'DEPOSITO', 'ABONO', 'DEVUELTO', 'BONIFICACION', 'INTERESES GANADOS']):
         return False # Es Ingreso
-        
-    # 2. Egresos explícitos
     if any(x in d for x in ['PAGO A', 'PAGO INTERBANCARIO', 'CHEQUE', 'COMISION', 'RETIRO', 'CARGO', 'TRASPASO ENTRE', 'INVERSION']):
         return True # Es Egreso
-        
-    # 3. Default
     return True # Egreso por seguridad
 
 def _extraer_beneficiario_banamex_legacy(desc):
-    """Lógica de respaldo para beneficiarios específicos de Banamex."""
+    # Lógica v9.3
     stopwords = ['PAGO', 'RECIBIDO', 'DE', 'A', 'POR', 'ORDEN', 'TRANSFERENCIA', 'SPEI', 'BANCANET', 'REF', 'RASTREO', 'SUC', 'CAJA', 'AUT', 'HORA', 'MISMO', 'DIA']
     palabras = desc.split()
     candidatos = []
@@ -433,6 +400,7 @@ def _extraer_beneficiario_banamex_legacy(desc):
     return " ".join(candidatos[:6])
 
 def funcion_validar_balance_transacciones(transacciones, metadatos):
+    # Lógica v9.3
     ing = sum(t['Monto de la transacción'] for t in transacciones if t['Clasificación'] == 'Ingreso')
     egr = sum(t['Monto de la transacción'] for t in transacciones if t['Clasificación'] == 'Egreso')
     
@@ -444,6 +412,6 @@ def funcion_validar_balance_transacciones(transacciones, metadatos):
     
     print(f"Balance Calculado: +{ing:,.2f} | -{egr:,.2f}")
     if abs(ing - dep_meta) < 5.0 and abs(egr - ret_meta) < 5.0:
-        print("✓ Balance Validado")
+        print("  Balance Validado")
     else:
         print(f"Diferencia en balance (Meta: +{dep_meta:,.2f} | -{ret_meta:,.2f})")

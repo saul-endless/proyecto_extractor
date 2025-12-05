@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Parser BBVA Empresa v5.6 DEFINITIVO
+Parser BBVA Empresa v6.0 MEJORADO
 Precisión 99.9% - Solución completa para problemas de extracción
 - Resuelve error de agrupación de líneas (v5.1)
 - Resuelve error de beneficiario antes/después (v5.2)
 - Resuelve error de balance/clasificación y 0 transacciones (v5.6)
-- IMPLEMENTA detector de layout robusto y lógica de parseo multi-formato
+- MEJORA CRÍTICA: Identificación precisa de Nombre de Empresa (IAM/SOWILO)
 """
 
 import re
@@ -35,7 +35,7 @@ def funcion_parsear_bbva_empresa(texto_completo, datos_ocr=None):
     Se ejecuta el parser principal de BBVA Empresa.
     Se devuelve diccionario con metadata y transacciones.
     """
-    print("\n=== Iniciando Parser BBVA Empresa v5.7 DEFINITIVO ===")
+    print("\n=== Iniciando Parser BBVA Empresa v6.0 (Fix Nombre Empresa) ===")
     
     # Se extraen los metadatos del estado de cuenta
     metadatos = funcion_extraer_metadatos_completos(texto_completo)
@@ -85,6 +85,8 @@ def funcion_extraer_metadatos_completos(texto):
     """
     Se extraen todos los metadatos del estado de cuenta BBVA.
     Se devuelve diccionario con estructura objetivo completa.
+    
+    MEJORA v6.0: Algoritmo de detección de nombre basado en estructura y regex extendido.
     """
     # Se inicializa diccionario de metadatos
     datos_raw = {
@@ -102,13 +104,56 @@ def funcion_extraer_metadatos_completos(texto):
     
     lineas = texto.split('\n')
     
-    # Se extrae el nombre de la empresa
-    for linea in lineas[:40]:
-        if re.search(r'(TECHNOLOGIES|INNOVATION|SOWILO|SA DE CV|S\.A\.|SOCIEDAD)', linea, re.IGNORECASE):
-            if 'BBVA' not in linea and 'BANCOMER' not in linea and len(linea.strip()) > 10:
-                datos_raw['nombre_empresa'] = linea.strip()
-                break
+    # --- EXTRACCIÓN MEJORADA DEL NOMBRE DE LA EMPRESA (v6.0) ---
+    nombre_encontrado = ""
     
+    # ESTRATEGIA 1: Búsqueda Estructural (La más precisa para IAM y SOWILO)
+    # En BBVA, el nombre suele estar justo debajo de la línea que dice solamente "BBVA"
+    # Se ignoran páginas de advertencia (RFC genérico).
+    for i, linea in enumerate(lineas[:80]): # Buscamos en las primeras 80 líneas (cubre pág 1 y 2)
+        linea_limpia = linea.strip()
+        
+        # Detectamos la marca BBVA sola
+        if linea_limpia == 'BBVA':
+            # Verificamos la siguiente línea con contenido
+            if i + 1 < len(lineas):
+                siguiente_linea = lineas[i+1].strip()
+                
+                # Filtros para descartar basura o páginas de aviso
+                es_aviso = any(x in siguiente_linea.upper() for x in [
+                    'RECIBISTE TU ESTADO', 'RFC GENÉRICO', 'CONSTANCIA DE', 
+                    'DATOS FISCALES', 'GLOSARIO', 'ESTADO DE CUENTA'
+                ])
+                
+                # Si la siguiente línea es válida, es el nombre
+                if siguiente_linea and not es_aviso and len(siguiente_linea) > 5:
+                    # Validación extra: no debe empezar con números (dirección)
+                    if not siguiente_linea[0].isdigit():
+                        nombre_encontrado = siguiente_linea
+                        print(f"  > Nombre detectado por estructura: {nombre_encontrado}")
+                        break
+
+    # ESTRATEGIA 2: Búsqueda por Regex Ampliada (Fallback)
+    # Si la estructura falla, buscamos por sufijos legales ampliados
+    if not nombre_encontrado:
+        patron_empresa = re.compile(
+            r'.*\b(SA DE CV|S\.A\.|SOCIEDAD|SC|S\.C\.|A\.C\.|S\.A\.B|LTD|INC|GRUPO|INSTITUTO|ASOCIACION|COLEGIO)\b.*', 
+            re.IGNORECASE
+        )
+        
+        for linea in lineas[:60]:
+            if patron_empresa.search(linea):
+                # Filtros de exclusión
+                if not any(x in linea.upper() for x in ['BBVA', 'BANCOMER', 'SUCURSAL', 'DIRECCION', 'CALLE', 'COL.', 'MEXICO', 'RFC', 'PAGINA']):
+                    if len(linea.strip()) > 5:
+                        nombre_encontrado = linea.strip()
+                        print(f"  > Nombre detectado por Regex: {nombre_encontrado}")
+                        break
+    
+    datos_raw['nombre_empresa'] = nombre_encontrado if nombre_encontrado else "EMPRESA NO IDENTIFICADA"
+    
+    # --- FIN EXTRACCIÓN NOMBRE ---
+
     # Se extrae el periodo
     patron_periodo = re.compile(
         r'(?:Periodo|PERIODO)\s+(?:DEL\s+)?(\d{2}/\d{2}/\d{4})\s+AL\s+(\d{2}/\d{2}/\d{4})',

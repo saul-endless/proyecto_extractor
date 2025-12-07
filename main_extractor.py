@@ -213,7 +213,7 @@ class BankStatementExtractor:
                 return parser.parsear_datos_generales([texto_completo])
 
         elif parser_key == "inbursa_empresa":
-            datos = parser.parsear_datos_generales(paginas_texto)
+            datos = parser.parsear_datos_generales(paginas_texto) 
             transacciones = parser.parsear_transacciones(paginas_texto, datos.get('saldo_inicial', 0))
             return {
                 "datos_generales": datos,

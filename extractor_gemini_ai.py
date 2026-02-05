@@ -43,34 +43,35 @@ contexto_compartido = {
     "mapa_columnas": {}
 }
 listas_finales = {"ingresos": [], "egresos": []}
+contador_transacciones = 0 
+CACHE_LECTURA_PDF_RAM = {}
 
 # -----------------------------------------------------------------------------
 # CONFIGURACIÓN DEL PROMPT FASE 0 (CALIBRACIÓN ADAPTATIVA)
 # -----------------------------------------------------------------------------
-PROMPT_FASE_0 = """Actúa como un experto en análisis de documentos financieros y OCR. Tu objetivo es calibrar las coordenadas de lectura para la tabla principal de "Detalle de Movimientos" en este estado de cuenta.
+PROMPT_FASE_0 = """Actúa como un experto en análisis de documentos financieros y OCR de alta precisión. Tu objetivo es calibrar las coordenadas de lectura para la tabla de "Detalle de Movimientos".
 
 Instrucciones de Búsqueda:
-1. Ignora las tablas de "Resumen de Saldos" o gráficos iniciales. Busca específicamente la sección de desglose de transacciones (suele titularse "Detalle de Movimientos", "Movimientos del Periodo", "Actividad", etc.).
-2. En esa tabla, localiza la fila de encabezados.
-3. Identifica la columna de SALIDAS de dinero buscando palabras clave como: "CARGOS", "RETIROS", "SALIDAS", "DEBITOS" o signos negativos (-).
-4. Identifica la columna de ENTRADAS de dinero buscando palabras clave como: "ABONOS", "DEPOSITOS", "ENTRADAS", "CREDITOS".
+1. Localiza la sección de desglose de transacciones (ignora resúmenes).
+2. Identifica la fila de encabezados principal.
+3. Identifica la columna de EGRESOS (Cargos, Retiros, Salidas, Débitos, signo -).
+4. Identifica la columna de INGRESOS (Abonos, Depósitos, Entradas, Créditos).
 
-Instrucciones de Cálculo de Coordenadas:
-- Calcula la coordenada X (horizontal) exacta del CENTRO geométrico de la palabra del encabezado.
-- Fórmula: (X_inicio + X_fin) / 2.
-- Asegúrate de que la coordenada corresponda a la alineación visual de la columna de datos, no solo al título si este está desplazado.
+Instrucciones de Cálculo y Escala:
+- Escala de salida: Debes mapear todas las coordenadas a un ancho de página de 612 unidades.
+- Centro Geométrico: Calcula (X_inicio + X_fin) / 2 del área que abarca el texto del encabezado.
+- Validación de Columna: El X_centro debe estar alineado verticalmente con el cuerpo de los datos numéricos de la columna, no solo con el texto del título.
 
-Salida Requerida:
-Devuelve ÚNICAMENTE un objeto JSON válido con este formato exacto:
+Salida Requerida (ÚNICAMENTE JSON):
 {
   "calibracion_layout": {
     "columna_egresos": {
-      "texto_detectado": "Texto",
-      "x_centro": 0
+      "texto_detectado": "Texto exacto",
+      "x_centro": 0.0
     },
     "columna_ingresos": {
-      "texto_detectado": "Texto",
-      "x_centro": 0
+      "texto_detectado": "Texto exacto",
+      "x_centro": 0.0
     },
     "ancho_total_pagina": 612
   }
@@ -155,7 +156,10 @@ descripción dice 'ABONO' o 'TRANSFERENCIA'.
           * Monto con "-" o sin signo → "Egreso"
           * Monto con "+" → "Ingreso"
      
-     - **MULTIPLICIDAD (REFUERZO DE SEGURIDAD):** Si hay muchas operaciones idénticas seguidas (ej. "FACTORAJE 1 DE 17", "2 DE 17", o múltiples depósitos del mismo monto el mismo día), **EXTRAE TODAS Y CADA UNA DE ELLAS**. No agrupes. Si hay 17 filas de 500,000, dame 17 objetos JSON.
+     - **MULTIPLICIDAD (MANDATO ABSOLUTO - PROHIBIDO AGRUPAR):** Si aparecen múltiples operaciones IDÉNTICAS (misma fecha, misma descripción exacta, mismo monto exacto) una tras otra, **TIENES QUE EXTRAER TODAS Y CADA UNA POR SEPARADO**.
+        * **ESTÁ ESTRICTAMENTE PROHIBIDO** agrupar, simplificar, consolidar o unificar transacciones repetidas. La IA NO debe intentar ser "inteligente" ahorrando espacio; debe ser un "espejo" exacto del PDF.
+        * **EJEMPLO CRÍTICO:** Si el estado de cuenta muestra 5 filas consecutivas de "$10,000.00" con la descripción "PAGO PRESTAMO" el mismo día, tu salida JSON **DEBE** contener 5 objetos independientes.
+        * Si extraes solo 1 objeto en lugar de los 5, la suma final no cuadrará y fallarás la tarea. Tu objetivo es transcribir la realidad fila por fila, no resumirla. Si hay 50 filas iguales, dame 50 objetos iguales.
      
      - **CONTINUIDAD DE PÁGINA (ANTI-PÉRDIDA DE DATOS):** - Presta atención extrema al **final de cada página** y al **inicio de la siguiente**. Es el lugar más común donde se pierden filas.
        - Si una página termina con una transacción y la siguiente empieza con otra (incluso si son idénticas en fecha y monto), **AMBAS EXISTEN**. No asumas que es un error de impresión o un duplicado visual.
@@ -443,19 +447,19 @@ def limpiar_respuesta_json(texto):
             texto_limpio = texto_limpio[inicio:fin].strip()
     return texto_limpio
 
-def dividir_pdf_en_bloques(pdf_path, paginas_por_bloque=2):
+def worker_conversion_imagenes(pdf_path, cola_salida, paginas_por_bloque=3):
     """
-    Convierte rangos del PDF a IMÁGENES JPG individuales (300 DPI).
+    Convierte rangos del PDF a IMÁGENES JPG individuales (300 DPI) en segundo plano
+    y las coloca en una cola para que Gemini las procese inmediatamente.
     """
     # Usamos pypdf solo para contar páginas rápido
     reader = PdfReader(pdf_path)
     total_paginas = len(reader.pages)
-    bloques_info = []
     
     temp_dir = pdf_path.parent / "temp_chunks"
     temp_dir.mkdir(exist_ok=True)
 
-    print(f"   > [MODO VISIÓN] Convirtiendo {total_paginas} páginas a imágenes...", flush=True)
+    print(f"   > [CONVERTIDOR] Iniciando conversión en segundo plano ({total_paginas} págs)...", flush=True)
 
     # Step = paginas_por_bloque - 1 (para mantener el intercalado de contexto)
     step = paginas_por_bloque - 1 if paginas_por_bloque > 1 else 1
@@ -471,13 +475,12 @@ def dividir_pdf_en_bloques(pdf_path, paginas_por_bloque=2):
         bloque_dir.mkdir(exist_ok=True)
         
         # Convertimos SOLO las páginas de este rango
-        # Nota: pdf2image usa índices base-1 (1 es la primera página)
         try:
             imagenes = convert_from_path(
                 str(pdf_path), 
                 first_page=i+1, 
                 last_page=fin,
-                dpi=350,       
+                dpi=350,        
                 fmt="png"
             )
         except Exception as e:
@@ -493,35 +496,54 @@ def dividir_pdf_en_bloques(pdf_path, paginas_por_bloque=2):
         
         tiene_contexto_previo = (i > 0)
         
-        bloques_info.append({
-            "rutas_imagenes": rutas_imagenes, # <--- AHORA RETORNAMOS LISTA DE RUTAS DE IMAGENES
+        info_bloque = {
+            "rutas_imagenes": rutas_imagenes,
             "tiene_contexto": tiene_contexto_previo,
-            "paginas": f"{i+1}-{fin}"
-        })
+            "paginas": f"{i+1}-{fin}",
+            "index": chunk_index
+        }
         
-        print(f"      Bloque {chunk_index + 1}: {len(rutas_imagenes)} imágenes generadas (Pags {i+1}-{fin}).", flush=True)
+        # Ponemos el lote en la cola. Si la cola está llena, espera aquí.
+        cola_salida.put(info_bloque)
+        # print(f"      Bloque {chunk_index + 1} puesto en cola (Pags {i+1}-{fin}).", flush=True)
         
         chunk_index += 1
         if fin == total_paginas:
             break
         i = i + step
     
-    return bloques_info
+    # Señal de fin
+    cola_salida.put(None)
+    print("   > [CONVERTIDOR] Finalizó la conversión de todos los bloques.", flush=True)
 
-def calibrar_layout_fase_0(bloque_path, model):
+def calibrar_layout_fase_0(rutas_imagenes, model):
     """
     Fase inicial para detectar las coordenadas exactas de las columnas.
+    AHORA: Recibe una lista de rutas de imágenes (del primer batch), no el PDF completo.
     """
-    print(f" [FASE 0] Detectando coordenadas adaptativas de columnas...", flush=True)
+    print(f" [FASE 0] Detectando coordenadas adaptativas de columnas (Usando primer batch de imágenes)...", flush=True)
     try:
-        archivo_subido = genai.upload_file(path=bloque_path)
-        intentos = 0
-        while archivo_subido.state.name == "PROCESSING" and intentos < 30:
-            time.sleep(1)
-            archivo_subido = genai.get_file(archivo_subido.name)
-            intentos += 1
+        archivos_subidos = []
+        # Subimos las imágenes del primer batch
+        for ruta in rutas_imagenes:
+            archivo = genai.upload_file(path=ruta, mime_type="image/jpeg")
             
-        respuesta = model.generate_content([PROMPT_FASE_0, archivo_subido])
+            intentos = 0
+            while archivo.state.name == "PROCESSING" and intentos < 30:
+                time.sleep(1)
+                archivo = genai.get_file(archivo.name)
+                intentos += 1
+            
+            if archivo.state.name == "FAILED":
+                print(f"Fallo subida imagen fase 0: {ruta.name}")
+                continue
+            archivos_subidos.append(archivo)
+            
+        if not archivos_subidos:
+            raise Exception("No se pudieron subir imágenes para calibración")
+
+        # Enviamos prompt + imágenes
+        respuesta = model.generate_content([PROMPT_FASE_0] + archivos_subidos)
         texto_limpio = limpiar_respuesta_json(respuesta.text)
         datos_calibracion = json.loads(texto_limpio)
         
@@ -538,31 +560,61 @@ def calibrar_layout_fase_0(bloque_path, model):
 # -----------------------------------------------------------------------------
 
 def procesar_fase_1(pdf_path, model, output_dir=None):
+    global contador_transacciones
+
     print(f"\n{'-'*60}", flush=True)
-    print(f"--- Procesando archivo: {pdf_path.name} (MODO IMAGENES/VISIÓN PURA) ---", flush=True)
+    print(f"--- Procesando archivo: {pdf_path.name} (PIPELINE: CONVERSIÓN + VISIÓN) ---", flush=True)
     print(f"{'-'*60}", flush=True)
-   
-    # 1. Llamamos a la nueva función que devuelve imágenes
-    bloques_info = dividir_pdf_en_bloques(pdf_path, paginas_por_bloque=2)
     
+    # 1. Crear cola y lanzar hilo convertidor (Productor)
+    # maxsize=3 evita llenar la RAM si Gemini es lento; el convertidor esperará.
+    cola_imagenes = queue.Queue(maxsize=3) 
+    
+    thread_converter = threading.Thread(
+        target=worker_conversion_imagenes, 
+        args=(pdf_path, cola_imagenes, 35)
+    )
+    thread_converter.start()
+    
+    bloque_actual = None
+    es_primer_bloque = True
     detener_proceso_total = False
-   
-    for idx, info_bloque in enumerate(bloques_info):
-        rutas_imgs = info_bloque["rutas_imagenes"] # Lista de paths JPG
-        es_bloque_con_contexto = info_bloque["tiene_contexto"]
-       
-        print(f"\n > Procesando bloque {idx + 1}/{len(bloques_info)} ({info_bloque['paginas']})...", flush=True)
-        if es_bloque_con_contexto:
-            print(" [Modo Intercalado: Primera imagen es contexto visual]", flush=True)
-       
+    
+    while True:
+        # 2. Obtenemos el siguiente bloque de la cola
+        try:
+            # Esperamos hasta 5 min por si la conversión de un bloque es lenta
+            bloque_actual = cola_imagenes.get(timeout=300) 
+        except queue.Empty:
+            print("Tiempo de espera agotado esperando imágenes del convertidor.")
+            break
+            
+        if bloque_actual is None: # Señal de fin del convertidor
+            break
+            
+        rutas_imgs = bloque_actual["rutas_imagenes"] # Lista de paths JPG
+        idx_bloque = bloque_actual["index"]
+        es_bloque_con_contexto = bloque_actual["tiene_contexto"]
+        
+        print(f"\n > Procesando bloque {idx_bloque + 1} ({bloque_actual['paginas']})...", flush=True)
+
         # -----------------------------------------------------------------------------
-        # SUBIDA DE IMÁGENES (Subimos la lista completa de este bloque una por una)
+        # FASE 0: EJECUCIÓN INMEDIATA CON EL PRIMER LOTE
+        # -----------------------------------------------------------------------------
+        if es_primer_bloque:
+            calib_res = calibrar_layout_fase_0(rutas_imgs, model)
+            if calib_res:
+                with lock_resultados:
+                    contexto_compartido["calibracion"] = calib_res
+            es_primer_bloque = False
+        
+        # -----------------------------------------------------------------------------
+        # SUBIDA DE IMÁGENES (Gemini Consumidor)
         # -----------------------------------------------------------------------------
         archivos_subidos_obj = []
-        
         try:
             for ruta_img in rutas_imgs:
-                print(f"   ^ Subiendo a Gemini: {ruta_img.name}...", flush=True)
+                # print(f"    ^ Subiendo: {ruta_img.name}...", flush=True)
                 # IMPORTANTE: mime_type="image/jpeg" fuerza al modelo a usar VISIÓN
                 archivo = genai.upload_file(path=ruta_img, mime_type="image/jpeg")
                 
@@ -577,25 +629,24 @@ def procesar_fase_1(pdf_path, model, output_dir=None):
                     raise Exception(f"Falló procesamiento de imagen {ruta_img.name}")
                     
                 archivos_subidos_obj.append(archivo)
-                
         except Exception as e:
-            print(f" ✗ Error crítico subiendo imágenes bloque {idx+1}: {e}", flush=True)
+            print(f" ✗ Error crítico subiendo imágenes bloque {idx_bloque+1}: {e}", flush=True)
+            cola_imagenes.task_done()
             continue # Saltamos al siguiente bloque si fallan las imágenes
-       
+        
         # -----------------------------------------------------------------------------
-        # CONSTRUCCIÓN DEL PROMPT Y REQUEST (CON MEMORIA DE CONTINUIDAD)
+        # CONSTRUCCIÓN DEL PROMPT Y REQUEST
         # -----------------------------------------------------------------------------
         with lock_resultados:
             mapa_heredado = contexto_compartido.get("mapa_columnas", {})
             ultima_tx = contexto_compartido.get("ultima_tx_bloque") # Recuperar memoria
-       
+        
         prompt_actual = PROMPT_FASE_1
         if mapa_heredado:
             prompt_actual += f"\n\nMAPA DE COLUMNAS GLOBAL HEREDADO (USAR OBLIGATORIAMENTE):\n{json.dumps(mapa_heredado, indent=2, ensure_ascii=False)}"
-       
+        
         if es_bloque_con_contexto:
             if ultima_tx:
-                # INTEGRACIÓN DE TU IDEA: Enviamos la última transacción para evitar duplicados visuales
                 prompt_actual += f"""
 ### CONTEXTO DE CONTINUIDAD (CRÍTICO)
 En el bloque anterior, la ÚLTIMA transacción que extrajiste fue:
@@ -607,14 +658,14 @@ Usa esta información para ubicarte en la primera página (contexto visual). NO 
 """
             else:
                 prompt_actual += INSTRUCCION_INTERCALADO
-       
+        
         # -----------------------------------------------------------------------------
         # INFERENCIA (REINTENTOS)
         # -----------------------------------------------------------------------------
         intentos_max = 4
         intento_actual = 0
         exito_bloque = False
-       
+        
         while intento_actual < intentos_max and not exito_bloque:
             intento_actual += 1
             if intento_actual > 1:
@@ -630,13 +681,13 @@ Usa esta información para ubicarte en la primera página (contexto visual). NO 
                 respuesta = model.generate_content(
                     contenido_request,
                     generation_config={"temperature": 0.0, "max_output_tokens": 65536},
-                    request_options={"timeout": 360}
+                    request_options={"timeout": 3600}
                 )
                 
                 fin_proceso = time.time()
                 tiempo_segundos = fin_proceso - inicio_proceso
                 
-                # --- LÓGICA DE PARSING Y DEDUPLICACIÓN (INTEGRACIÓN) ---
+                # --- LÓGICA DE PARSING Y DEDUPLICACIÓN ---
                 texto_respuesta = limpiar_respuesta_json(respuesta.text)
                 data_bloque = json.loads(texto_respuesta)
                 
@@ -654,26 +705,29 @@ Usa esta información para ubicarte en la primera página (contexto visual). NO 
                     desc_raw = str(t.get("Nombre de la transaccion", "")).strip()
                     fecha = t.get("Fecha de la transaccion", "")
                     
-                    # Generar Huella Digital (normalizada para ignorar mayúsculas/espacios/basura)
                     desc_norm = "".join(e for e in desc_raw.lower() if e.isalnum())
-                    huella = f"{fecha}|{monto}|{desc_norm}"
+                    
+                    # Incrementar contador para cada transacción procesada
+                    contador_transacciones += 1
+                    huella = f"{fecha}|{monto}|{desc_norm}|TX{contador_transacciones}"
                     
                     with lock_resultados:
-                        # DEDUPLICADOR POR HUELLA: Si no lo hemos visto, se procesa
-                        if huella not in contexto_compartido["vistos_global"] and (monto != 0 or desc_raw != ""):
+                        es_transaccion_valida = (monto != 0 or desc_raw != "")
+                        
+                        if es_transaccion_valida:
                             contexto_compartido["vistos_global"].add(huella)
                             cola_transacciones.put(t)
-                            contexto_compartido["ultima_tx_bloque"] = t # Actualizar memoria
+                            contexto_compartido["ultima_tx_bloque"] = t
                             procesadas_en_este_bloque += 1
                 
                 if procesadas_en_este_bloque > 0:
                     print(f" ✓ Enviadas {procesadas_en_este_bloque} transacciones nuevas a la COLA.", flush=True)
                 
-                if not nuevas_trans:
-                     print(f" STOP >> 0 transacciones en bloque {idx + 1}.", flush=True)
-                     detener_proceso_total = True
+                if not nuevas_trans and idx_bloque > 0:
+                      print(f" STOP >> 0 transacciones en bloque {idx_bloque + 1}.", flush=True)
+                      detener_proceso_total = True
                 
-                if idx == 0:
+                if idx_bloque == 0:
                     datos_nuevos = data_bloque.get("datos_generales", {})
                     with lock_resultados:
                         contexto_compartido["datos_generales"] = datos_nuevos
@@ -693,24 +747,36 @@ Usa esta información para ubicarte en la primera página (contexto visual). NO 
                 print(f" ✗ Error intento {intento_actual}: {str(e)}", flush=True)
 
         if not exito_bloque:
-            print(f" ✗ Se agotaron los intentos para el bloque {idx+1}.", flush=True)
+            print(f" ✗ Se agotaron los intentos para el bloque {idx_bloque+1}.", flush=True)
+
+        cola_imagenes.task_done()
 
         if detener_proceso_total:
             break
             
         time.sleep(2)
-   
+    
+    print(" [SISTEMA] Finalizando hilos restantes...", flush=True)
+    while thread_converter.is_alive():
+        try:
+            cola_imagenes.get(block=False)
+            cola_imagenes.task_done()
+        except queue.Empty:
+            pass # La cola está vacía
+        
+        # Esperamos brevemente a que el hilo muera ahora que tiene espacio
+        thread_converter.join(timeout=0.1)
+
     cola_transacciones.put(None)
     print("\n--- [GEMINI] Fin de lectura. ---", flush=True)
 
 # -----------------------------------------------------------------------------
-# VERSIÓN MEJORADA DE auditoria_espacial (CONTEXTO FILA + MONTO)
-# (SUSTITUIR LA FUNCIÓN COMPLETA)
+# VERSIÓN MEJORADA DE auditoria_espacial
 # -----------------------------------------------------------------------------
 def auditoria_espacial(ruta_pdf, transaccion, indice_ocurrencia=0, mapa_columnas=None, calibracion=None):
     """
     Busca el monto en el PDF considerando duplicados.
-    CORRECCIÓN: Si el índice_ocurrencia no existe, devuelve Error/Conflicto para evitar fantasmas.
+    OPTIMIZACIÓN: Lee el PDF una sola vez y lo guarda en RAM (CACHE_LECTURA_PDF_RAM).
     """
     monto_float = transaccion.get("Monto de la transacción", 0.0)
     descripcion = transaccion.get("Nombre de la transaccion", "").upper()
@@ -739,53 +805,71 @@ def auditoria_espacial(ruta_pdf, transaccion, indice_ocurrencia=0, mapa_columnas
 
     candidatos_encontrados = [] # Lista para guardar TODAS las coincidencias
 
-    with pdfplumber.open(ruta_pdf) as pdf:
-        # Limitamos búsqueda a primeras páginas para rendimiento (ajusta si es necesario)
-        paginas = pdf.pages[0:15]
+    # --- INICIO MODIFICACIÓN: CACHÉ DE LECTURA (VELOCIDAD x100) ---
+    ruta_str = str(ruta_pdf)
+    
+    # 1. Verificar si ya tenemos este PDF en memoria RAM
+    if ruta_str not in CACHE_LECTURA_PDF_RAM:
+        print(f" [CPU] Cargando PDF en memoria RAM para validación masiva: {ruta_pdf.name}...", flush=True)
+        try:
+            datos_paginas = []
+            with pdfplumber.open(ruta_pdf) as pdf:
+                for pagina in pdf.pages:
+                    # Extraemos las palabras UNA SOLA VEZ y las guardamos
+                    datos_paginas.append(pagina.extract_words())
+            CACHE_LECTURA_PDF_RAM[ruta_str] = datos_paginas
+        except Exception as e:
+            print(f"Error crítico leyendo PDF para caché: {e}")
+            return 0, "Error Lectura", False
+
+    # 2. Recuperar datos desde la RAM (Instantáneo)
+    paginas_cacheadas = CACHE_LECTURA_PDF_RAM[ruta_str]
+
+    # 3. Iterar sobre los datos en memoria (Ya no se abre el archivo)
+    for num_pag, words in enumerate(paginas_cacheadas):
+        # (Aquí sigue tu lógica original intacta, pero usando 'words' de la RAM)
         
-        for num_pag, pagina in enumerate(paginas):
-            words = pagina.extract_words()
+        # 1. Mapear filas donde aparece la descripción
+        filas_desc_y = []
+        for word in words:
+            if word['text'].upper() in tokens_desc:
+                y_centro = (word['top'] + word['bottom']) / 2
+                filas_desc_y.append(y_centro)
+
+        if not filas_desc_y: continue
+
+        # 2. Buscar montos alineados con esas filas
+        for word in words:
+            texto_limpio = word['text'].replace("$", "").replace(",", "")
+            es_monto = False
+            try:
+                if float(texto_limpio) == monto_float: es_monto = True
+            except:
+                pass
             
-            # 1. Mapear filas donde aparece la descripción
-            filas_desc_y = []
-            for word in words:
-                if word['text'].upper() in tokens_desc:
-                    y_centro = (word['top'] + word['bottom']) / 2
-                    filas_desc_y.append(y_centro)
+            if not es_monto and word['text'] not in variantes_monto:
+                continue
 
-            if not filas_desc_y: continue
+            y_monto = (word['top'] + word['bottom']) / 2
+            
+            # Verificar alineación Y con descripción
+            alineado = False
+            for y_desc in filas_desc_y:
+                if abs(y_monto - y_desc) < TOLERANCIA_Y:
+                    alineado = True
+                    break
+            
+            if alineado:
+                # Guardamos el candidato: (NumeroPagina, Y, X, ObjetoWord)
+                candidatos_encontrados.append({
+                    "pag": num_pag,
+                    "y": y_monto,
+                    "x": (word['x0'] + word['x1']) / 2,
+                    "word": word
+                })
+    # --- FIN MODIFICACIÓN CACHÉ ---
 
-            # 2. Buscar montos alineados con esas filas
-            for word in words:
-                texto_limpio = word['text'].replace("$", "").replace(",", "")
-                es_monto = False
-                try:
-                    if float(texto_limpio) == monto_float: es_monto = True
-                except:
-                    pass
-                
-                if not es_monto and word['text'] not in variantes_monto:
-                    continue
-
-                y_monto = (word['top'] + word['bottom']) / 2
-                
-                # Verificar alineación Y con descripción
-                alineado = False
-                for y_desc in filas_desc_y:
-                    if abs(y_monto - y_desc) < TOLERANCIA_Y:
-                        alineado = True
-                        break
-                
-                if alineado:
-                    # Guardamos el candidato: (NumeroPagina, Y, X, ObjetoWord)
-                    candidatos_encontrados.append({
-                        "pag": num_pag,
-                        "y": y_monto,
-                        "x": (word['x0'] + word['x1']) / 2,
-                        "word": word
-                    })
-
-    # --- LÓGICA DE SELECCIÓN DE DUPLICADOS (CORREGIDA) ---
+    # --- LÓGICA DE SELECCIÓN DE DUPLICADOS (INTACTA) ---
     
     if not candidatos_encontrados:
         return 0, "No encontrado", False
@@ -1391,6 +1475,9 @@ def main():
 
     for archivo in archivos_pdf:
         # Reiniciar estados globales
+        global contador_transacciones
+        contador_transacciones = 0 
+
         while not cola_transacciones.empty(): cola_transacciones.get()
         listas_finales["ingresos"], listas_finales["egresos"] = [], []
         
@@ -1402,11 +1489,6 @@ def main():
             contexto_compartido["mapa_columnas"] = {}
         
         evento_titular_listo.clear()
-        
-        # --- FASE 0: CALIBRACIÓN ANTES DE LOS HILOS ---
-        calib_res = calibrar_layout_fase_0(str(archivo), model_gemini)
-        with lock_resultados:
-            contexto_compartido["calibracion"] = calib_res
         
         # Lanzar Hilos
         t_gemini = threading.Thread(target=procesar_fase_1, args=(archivo, model_gemini))
@@ -1448,6 +1530,9 @@ def main_extraction_ia(ruta_pdf: str, directorio_salida: str) -> dict:
             shutil.rmtree(temp_dir)
             
         # Reiniciar estados
+        global contador_transacciones
+        contador_transacciones = 0 
+
         while not cola_transacciones.empty(): cola_transacciones.get()
         listas_finales["ingresos"], listas_finales["egresos"] = [], []
         
@@ -1459,11 +1544,6 @@ def main_extraction_ia(ruta_pdf: str, directorio_salida: str) -> dict:
             contexto_compartido["mapa_columnas"] = {}
             
         evento_titular_listo.clear()
-
-        # FASE 0: CALIBRACIÓN
-        calib_res = calibrar_layout_fase_0(str(pdf_path), model_gemini)
-        with lock_resultados:
-            contexto_compartido["calibracion"] = calib_res
         
         # Hilos
         t_gemini = threading.Thread(target=procesar_fase_1, args=(pdf_path, model_gemini))

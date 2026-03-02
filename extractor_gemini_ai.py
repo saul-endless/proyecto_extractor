@@ -23,8 +23,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 # -----------------------------------------------------------------------------
 # CONFIGURACION
 # -----------------------------------------------------------------------------
-API_KEY = "AIzaSyBBOu82OkTGsXiAx4BnrNYR1kdJAL70g4o"
-API_KEY_CALIBRACION = "AIzaSyBBOu82OkTGsXiAx4BnrNYR1kdJAL70g4o"
+API_KEY = ""
+API_KEY_CALIBRACION = ""
 NOMBRE_MODELO = 'gemini-3-flash-preview' 
 #NOMBRE_MODELO = 'gemini-3.1-pro-preview' 
 #NOMBRE_MODELO = 'gemini-2.5-pro' 

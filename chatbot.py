@@ -35,7 +35,7 @@ def limpiar_texto_para_api(texto):
 # -----------------------------------------------------------------------------
 
 # Configuracion interna oculta
-API_KEY_INTERNAL = "AIzaSyBBOu82OkTGsXiAx4BnrNYR1kdJAL70g4o"
+API_KEY_INTERNAL = ""
 MODEL_INTERNAL = 'gemini-3-flash-preview'
 MODEL_MATH_INTERNAL = 'gemini-3-flash-preview' 
 

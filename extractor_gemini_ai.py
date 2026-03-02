@@ -1,4 +1,5 @@
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import json
 import os
 import time
@@ -7,9 +8,12 @@ import shutil
 import threading
 import queue
 import pdfplumber
+import csv
+from datetime import datetime
 from pathlib import Path
 from pypdf import PdfReader, PdfWriter
 from pdf2image import convert_from_path
+import concurrent.futures
 
 # Importaciones para el motor Qwen
 import torch
@@ -19,8 +23,15 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 # -----------------------------------------------------------------------------
 # CONFIGURACION
 # -----------------------------------------------------------------------------
-API_KEY = "AIzaSyBOTpTsvS31GbVKnQMugXtca4iC4v5iIcs"
-NOMBRE_MODELO = 'gemini-3-pro-preview' 
+API_KEY = "AIzaSyBBOu82OkTGsXiAx4BnrNYR1kdJAL70g4o"
+API_KEY_CALIBRACION = "AIzaSyBBOu82OkTGsXiAx4BnrNYR1kdJAL70g4o"
+NOMBRE_MODELO = 'gemini-3-flash-preview' 
+#NOMBRE_MODELO = 'gemini-3.1-pro-preview' 
+#NOMBRE_MODELO = 'gemini-2.5-pro' 
+
+# Inicialización del cliente global
+client = genai.Client(api_key=API_KEY)
+client_calibracion = genai.Client(api_key=API_KEY_CALIBRACION)
 
 # Ruta del modelo local
 RUTA_MODELO_QWEN = "/home/endless/FUNCIONALIDADES/PRUEBA MODELOS/MODELOS/Qwen2.5-7B-Instruct"
@@ -49,31 +60,31 @@ CACHE_LECTURA_PDF_RAM = {}
 # -----------------------------------------------------------------------------
 # CONFIGURACIÓN DEL PROMPT FASE 0 (CALIBRACIÓN ADAPTATIVA)
 # -----------------------------------------------------------------------------
-PROMPT_FASE_0 = """Actúa como un experto en análisis de documentos financieros y OCR de alta precisión. Tu objetivo es calibrar las coordenadas de lectura para la tabla de "Detalle de Movimientos".
+PROMPT_FASE_0 = """Actúa como un experto en análisis de documentos financieros y OCR de alta precisión. Tu objetivo es calibrar las coordenadas horizontales (X) para las columnas de la tabla de movimientos.
 
-Instrucciones de Búsqueda:
-1. Localiza la sección de desglose de transacciones (ignora resúmenes).
-2. Identifica la fila de encabezados principal.
-3. Identifica la columna de EGRESOS (Cargos, Retiros, Salidas, Débitos, signo -).
-4. Identifica la columna de INGRESOS (Abonos, Depósitos, Entradas, Créditos).
+CRÍTICO - DESALINEACIÓN VISUAL DE COLUMNAS: 
+En muchos bancos, el texto del ENCABEZADO está centrado, pero los NÚMEROS (los montos reales) están alineados a la DERECHA. 
+Si calculas las coordenadas usando el texto del título, ¡LA EXTRACCIÓN FALLARÁ!
 
-Instrucciones de Cálculo y Escala:
-- Escala de salida: Debes mapear todas las coordenadas a un ancho de página de 612 unidades.
-- Centro Geométrico: Calcula (X_inicio + X_fin) / 2 del área que abarca el texto del encabezado.
-- Validación de Columna: El X_centro debe estar alineado verticalmente con el cuerpo de los datos numéricos de la columna, no solo con el texto del título.
+Instrucciones de Búsqueda y Cálculo:
+1. Localiza físicamente los NÚMEROS (ej. 1,500.00) que están debajo de la columna de EGRESOS (Cargos, Retiros, Salidas, Débitos) y la columna de INGRESOS (Abonos, Depósitos, Entradas, Créditos).
+2. IGNORA EL TEXTO DEL ENCABEZADO. Mide el centro geométrico (x_centro) directamente sobre los DÍGITOS de los montos de las transacciones reales.
+3. Escala de salida: Ancho de página = 612 unidades. 
+4. Compensación: Si notas que los números caen más hacia la derecha del título, asegúrate de que el valor "x_centro" esté desplazado hacia la derecha coincidiendo con los números.
 
 Salida Requerida (ÚNICAMENTE JSON):
 {
   "calibracion_layout": {
     "columna_egresos": {
-      "texto_detectado": "Texto exacto",
+      "texto_detectado": "Texto exacto del título (ej. RETIROS)",
       "x_centro": 0.0
     },
     "columna_ingresos": {
-      "texto_detectado": "Texto exacto",
+      "texto_detectado": "Texto exacto del título (ej. DEPOSITOS)",
       "x_centro": 0.0
     },
-    "ancho_total_pagina": 612
+    "ancho_total_pagina": 612,
+    "notas_alineacion": "Breve nota técnica indicando si los números están alineados a la derecha del título para justificar el x_centro."
   }
 }"""
 
@@ -95,10 +106,22 @@ descripción dice 'ABONO' o 'TRANSFERENCIA'.
    - FORMATO FINAL: "DD/MM/AAAA" (Ej: "01/04/2025"). No me des fechas sin año.
 
 2. **DATOS DE PORTADA / RESUMEN (CRÍTICO):**
-   - Ve a la **primera página** o a la sección "RESUMEN DE CUENTA". Extrae los datos "TAL CUAL" aparecen ahí:
-   - "Nombre de la empresa" (Titular).
+   - Ve a la **primera página** o a la sección "RESUMEN DE CUENTA".
+   
+   - **"Banco":** Identifica el banco que emite el estado de cuenta (ej. BBVA, Banamex, Santander, HSBC, etc.).
+   
+   - **"Nombre de la empresa" (Titular):** Este dato extráelo "TAL CUAL" (literal).
+   
    - **"Numero de Cuenta":** Busca el número de cuenta o CLABE completo.
-   - **"Periodo":** Identifica el rango y FORMATÉALO así: "DD/MM/AAAA al DD/MM/AAAA".
+   
+   - **"Periodo" (REGLA DE NORMALIZACIÓN ESTRICTA):**
+     - **NO** extraigas el periodo "tal cual". Tu trabajo aquí es **TRADUCIR** a números.
+     - Si el PDF dice "Abr.", "Abril", "Apr" -> TÚ ESCRIBES "04".
+     - Si el PDF dice "Ene.", "Enero", "Jan" -> TÚ ESCRIBES "01".
+     - **FORMATO DE SALIDA OBLIGATORIO:** "DD/MM/AAAA al DD/MM/AAAA".
+     - Ejemplo: Si ves "Del 01 Abr. 2025 al 30 Abr. 2025", tu salida JSON **DEBE** ser "01/04/2025 al 30/04/2025".
+     - **PROHIBIDO:** Usar letras o puntos en este campo.
+
    - **SALDOS Y TOTALES (De la tabla de resumen, NO calculados):**
      - "Saldo Inicial" (o Saldo Anterior).
      - "Saldo Final" (o Saldo Actual/Nuevo).
@@ -145,17 +168,18 @@ descripción dice 'ABONO' o 'TRANSFERENCIA'.
         
      - **EJEMPLO VISUAL:**
         Fecha | Descripción               | CARGOS  | ABONOS
-        15/09 | PAGO CUENTA TERCERO      | 5,394.00|
+        15/09 | PAGO CUENTA TERCERO       | 5,394.00|
         15/09 | DEPOSITO RECIBIDO         |         | 28,420.00
 
         - Primera línea: Número en columna CARGOS → Clasificacion: "Egreso"
         - Segunda línea: Número en columna ABONOS → Clasificacion: "Ingreso"
         
      - **CASOS ESPECIALES:**
-        - Si el PDF tiene el monto en UNA SOLA COLUMNA con signo (+/-):
-          * Monto con "-" o sin signo → "Egreso"
-          * Monto con "+" → "Ingreso"
-     
+                - Si el PDF tiene el monto en UNA SOLA COLUMNA con signo (+/-):
+                  * Monto con "-" o sin signo → "Egreso"
+                  * Monto con "+" → "Ingreso"
+                - **MONTOS CON SIGNO NEGATIVO AL FINAL (CRÍTICO):** Si el monto impreso en el PDF termina con un signo negativo (ej. "8,500.00-", "480.00-"), clasifícalo estrictamente según la columna en la que se ubica visualmente (generalmente es "Egreso" por estar en la columna de Retiros). PERO, al extraer el valor, **DEBES pasarlo como un número negativo (float negativo)** en tu JSON (ej. -8500.00). ¡NO lo conviertas a "Ingreso" asumiendo que es una devolución, y NO ignores el signo negativo!
+             
      - **MULTIPLICIDAD (MANDATO ABSOLUTO - PROHIBIDO AGRUPAR):** Si aparecen múltiples operaciones IDÉNTICAS (misma fecha, misma descripción exacta, mismo monto exacto) una tras otra, **TIENES QUE EXTRAER TODAS Y CADA UNA POR SEPARADO**.
         * **ESTÁ ESTRICTAMENTE PROHIBIDO** agrupar, simplificar, consolidar o unificar transacciones repetidas. La IA NO debe intentar ser "inteligente" ahorrando espacio; debe ser un "espejo" exacto del PDF.
         * **EJEMPLO CRÍTICO:** Si el estado de cuenta muestra 5 filas consecutivas de "$10,000.00" con la descripción "PAGO PRESTAMO" el mismo día, tu salida JSON **DEBE** contener 5 objetos independientes.
@@ -164,8 +188,8 @@ descripción dice 'ABONO' o 'TRANSFERENCIA'.
      - **CONTINUIDAD DE PÁGINA (ANTI-PÉRDIDA DE DATOS):** - Presta atención extrema al **final de cada página** y al **inicio de la siguiente**. Es el lugar más común donde se pierden filas.
        - Si una página termina con una transacción y la siguiente empieza con otra (incluso si son idénticas en fecha y monto), **AMBAS EXISTEN**. No asumas que es un error de impresión o un duplicado visual.
        - Ignora encabezados intermedios repetidos (como "SALDO ANTERIOR" al inicio de página) pero **CAPTURA la primera transacción real** de la nueva página.
-     
-     - **Monto de la transaccion:** Extrae solo el número (float).
+             
+     - **Monto de la transaccion:** Extrae solo el número (float). Si el número impreso en el PDF tiene un signo negativo al final (ej. "8,500.00-"), asegúrate de que el valor float final incluya el signo negativo (ej. -8500.00).
 
 5. **VERIFICACION ESTRUCTURAL DE COLUMNAS (OBLIGATORIO ANTES DE EXTRAER):**
    - Antes de extraer cualquier transacción, responde mentalmente estas preguntas:
@@ -209,6 +233,7 @@ Devuelve solo este objeto JSON raw. No cambies las claves:
 
 {
   "datos_generales": {
+      "banco_detectado": "Texto...",
       "nombre_empresa_detectado": "Texto...",
       "numero_cuenta_detectado": "Texto...",
       "periodo_detectado": "Texto...",
@@ -430,8 +455,26 @@ SALIDA ESPERADA (JSON Array puro):
 # -----------------------------------------------------------------------------
 
 def configurar_gemini():
-    genai.configure(api_key=API_KEY)
-    return genai.GenerativeModel(NOMBRE_MODELO)
+    return client
+
+def limpiar_archivos_api():
+    """Borra archivos de AMBAS cuentas (Principal y Calibración)."""
+    print("[SISTEMA] Iniciando limpieza de almacenamiento en la nube...", flush=True)
+    
+    def limpiar_cliente(c, nombre):
+        try:
+            count = 0
+            for f in c.files.list():
+                c.files.delete(name=f.name)
+                count += 1
+            print(f"   > {nombre}: {count} archivos borrados.", flush=True)
+        except Exception as e:
+            print(f"   > {nombre}: Error {e}", flush=True)
+
+    # Limpiar cuenta principal
+    limpiar_cliente(client, "Cuenta Principal")
+    # Limpiar cuenta calibración
+    limpiar_cliente(client_calibracion, "Cuenta Calibración")
 
 def limpiar_respuesta_json(texto):
     texto_limpio = texto.strip()
@@ -480,7 +523,7 @@ def worker_conversion_imagenes(pdf_path, cola_salida, paginas_por_bloque=3):
                 str(pdf_path), 
                 first_page=i+1, 
                 last_page=fin,
-                dpi=350,        
+                dpi=300,        
                 fmt="png"
             )
         except Exception as e:
@@ -490,8 +533,8 @@ def worker_conversion_imagenes(pdf_path, cola_salida, paginas_por_bloque=3):
         rutas_imagenes = []
         for idx_img, img in enumerate(imagenes):
             # Guardamos cada página como imagen física
-            ruta_img = bloque_dir / f"pag_{i + idx_img}.jpg"
-            img.save(ruta_img, "JPEG", quality=95)
+            ruta_img = bloque_dir / f"pag_{i + idx_img}.png"
+            img.save(ruta_img, "PNG")
             rutas_imagenes.append(ruta_img)
         
         tiene_contexto_previo = (i > 0)
@@ -516,22 +559,23 @@ def worker_conversion_imagenes(pdf_path, cola_salida, paginas_por_bloque=3):
     cola_salida.put(None)
     print("   > [CONVERTIDOR] Finalizó la conversión de todos los bloques.", flush=True)
 
-def calibrar_layout_fase_0(rutas_imagenes, model):
+def calibrar_layout_fase_0(rutas_imagenes, client_obj):
     """
-    Fase inicial para detectar las coordenadas exactas de las columnas.
-    AHORA: Recibe una lista de rutas de imágenes (del primer batch), no el PDF completo.
+    Fase inicial para detectar las coordenadas exactas de las columnas (SDK Nuevo).
     """
     print(f" [FASE 0] Detectando coordenadas adaptativas de columnas (Usando primer batch de imágenes)...", flush=True)
     try:
         archivos_subidos = []
         # Subimos las imágenes del primer batch
         for ruta in rutas_imagenes:
-            archivo = genai.upload_file(path=ruta, mime_type="image/jpeg")
+            time.sleep(3.0) # Retardo de seguridad
+            
+            archivo = client_obj.files.upload(file=ruta, config={'mime_type': 'image/png'})
             
             intentos = 0
             while archivo.state.name == "PROCESSING" and intentos < 30:
                 time.sleep(1)
-                archivo = genai.get_file(archivo.name)
+                archivo = client_obj.files.get(name=archivo.name)
                 intentos += 1
             
             if archivo.state.name == "FAILED":
@@ -542,18 +586,32 @@ def calibrar_layout_fase_0(rutas_imagenes, model):
         if not archivos_subidos:
             raise Exception("No se pudieron subir imágenes para calibración")
 
-        # Enviamos prompt + imágenes
-        respuesta = model.generate_content([PROMPT_FASE_0] + archivos_subidos)
+        contenido = [PROMPT_FASE_0] + archivos_subidos
+        
+        t_inicio_f0 = time.time()
+        respuesta = client_obj.models.generate_content(
+            model=NOMBRE_MODELO,
+            contents=contenido,
+            config=types.GenerateContentConfig(
+                temperature=0.0,
+                max_output_tokens=65536,
+                tools=[types.Tool(code_execution=types.ToolCodeExecution())],
+                thinking_config=types.ThinkingConfig(thinking_level="high")
+            )
+        )
+        t_fin_f0 = time.time()
+        tiempo_f0 = t_fin_f0 - t_inicio_f0
+        
         texto_limpio = limpiar_respuesta_json(respuesta.text)
         datos_calibracion = json.loads(texto_limpio)
         
         calibracion = datos_calibracion.get("calibracion_layout")
         if calibracion:
-            print(f" ✓ Calibración exitosa: Egresos ({calibracion['columna_egresos']['texto_detectado']} @ {calibracion['columna_egresos']['x_centro']}) | Ingresos ({calibracion['columna_ingresos']['texto_detectado']} @ {calibracion['columna_ingresos']['x_centro']})", flush=True)
-            return calibracion
+            print(f" ✓ Calibración exitosa: Egresos ({calibracion['columna_egresos']['texto_detectado']} @ {calibracion['columna_egresos']['x_centro']}) | Ingresos ({calibracion['columna_ingresos']['texto_detectado']} @ {calibracion['columna_ingresos']['x_centro']}) [T: {tiempo_f0:.2f}s]", flush=True)
+            return calibracion, respuesta.usage_metadata.prompt_token_count, respuesta.usage_metadata.candidates_token_count, tiempo_f0
     except Exception as e:
         print(f" ✗ Error en Calibración Fase 0: {e}", flush=True)
-    return None
+    return None, 0, 0, 0.0
 
 # -----------------------------------------------------------------------------
 # PROCESAMIENTO PRINCIPAL CON MANEJO DE TIMEOUTS
@@ -592,54 +650,66 @@ def procesar_fase_1(pdf_path, model, output_dir=None):
         if bloque_actual is None: # Señal de fin del convertidor
             break
             
-        rutas_imgs = bloque_actual["rutas_imagenes"] # Lista de paths JPG
+        rutas_imgs = bloque_actual["rutas_imagenes"] # Lista de paths PNG
         idx_bloque = bloque_actual["index"]
         es_bloque_con_contexto = bloque_actual["tiene_contexto"]
         
         print(f"\n > Procesando bloque {idx_bloque + 1} ({bloque_actual['paginas']})...", flush=True)
 
         # -----------------------------------------------------------------------------
-        # FASE 0: EJECUCIÓN INMEDIATA CON EL PRIMER LOTE
+        # FASE 0: EJECUCIÓN EN PARALELO (HILO INDEPENDIENTE)
         # -----------------------------------------------------------------------------
         if es_primer_bloque:
-            calib_res = calibrar_layout_fase_0(rutas_imgs, model)
-            if calib_res:
+            def ejecutar_fase_0_bg(rutas, cliente):
+                calib_res, in_tok, out_tok, tiempo_f0 = calibrar_layout_fase_0(rutas, cliente)
                 with lock_resultados:
-                    contexto_compartido["calibracion"] = calib_res
+                    if calib_res:
+                        contexto_compartido["calibracion"] = calib_res
+                    contexto_compartido["tokens_fase0_in"] = in_tok
+                    contexto_compartido["tokens_fase0_out"] = out_tok
+                    contexto_compartido["tiempo_fase0"] = tiempo_f0
+            
+            hilo_fase0 = threading.Thread(
+                target=ejecutar_fase_0_bg, 
+                args=(rutas_imgs[:5], client_calibracion)
+            )
+            hilo_fase0.start()
+            
             es_primer_bloque = False
-        
+
         # -----------------------------------------------------------------------------
-        # SUBIDA DE IMÁGENES (Gemini Consumidor)
+        # SUBIDA DE IMÁGENES (Gemini Consumidor) - PARALELIZADA
         # -----------------------------------------------------------------------------
         archivos_subidos_obj = []
         try:
-            for ruta_img in rutas_imgs:
-                # print(f"    ^ Subiendo: {ruta_img.name}...", flush=True)
-                # IMPORTANTE: mime_type="image/jpeg" fuerza al modelo a usar VISIÓN
-                archivo = genai.upload_file(path=ruta_img, mime_type="image/jpeg")
-                
-                # Esperar a que esté ACTIVE
-                intentos_upload = 0
-                while archivo.state.name == "PROCESSING" and intentos_upload < 20:
+            def subir_y_esperar(ruta):
+                archivo = client.files.upload(file=ruta, config={'mime_type': 'image/png'})
+                intentos = 0
+                while archivo.state.name == "PROCESSING" and intentos < 20:
                     time.sleep(1)
-                    archivo = genai.get_file(archivo.name)
-                    intentos_upload += 1
-                
+                    archivo = client.files.get(name=archivo.name)
+                    intentos += 1
                 if archivo.state.name == "FAILED":
-                    raise Exception(f"Falló procesamiento de imagen {ruta_img.name}")
+                    raise Exception(f"Falló procesamiento de imagen {ruta.name}")
+                return archivo
+
+            # Sube las imágenes del bloque al mismo tiempo (hasta 5 hilos)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                futuros = [executor.submit(subir_y_esperar, ruta_img) for ruta_img in rutas_imgs]
+                for futuro in concurrent.futures.as_completed(futuros):
+                    archivos_subidos_obj.append(futuro.result())
                     
-                archivos_subidos_obj.append(archivo)
         except Exception as e:
             print(f" ✗ Error crítico subiendo imágenes bloque {idx_bloque+1}: {e}", flush=True)
             cola_imagenes.task_done()
-            continue # Saltamos al siguiente bloque si fallan las imágenes
+            continue
         
         # -----------------------------------------------------------------------------
         # CONSTRUCCIÓN DEL PROMPT Y REQUEST
         # -----------------------------------------------------------------------------
         with lock_resultados:
             mapa_heredado = contexto_compartido.get("mapa_columnas", {})
-            ultima_tx = contexto_compartido.get("ultima_tx_bloque") # Recuperar memoria
+            ultima_tx = contexto_compartido.get("ultima_tx_bloque") 
         
         prompt_actual = PROMPT_FASE_1
         if mapa_heredado:
@@ -660,7 +730,7 @@ Usa esta información para ubicarte en la primera página (contexto visual). NO 
                 prompt_actual += INSTRUCCION_INTERCALADO
         
         # -----------------------------------------------------------------------------
-        # INFERENCIA (REINTENTOS)
+        # INFERENCIA (REINTENTOS - SDK NUEVO)
         # -----------------------------------------------------------------------------
         intentos_max = 4
         intento_actual = 0
@@ -675,17 +745,26 @@ Usa esta información para ubicarte en la primera página (contexto visual). NO 
             try:
                 inicio_proceso = time.time()
                 
-                # --- CAMBIO CRÍTICO: Enviamos lista [Prompt, img1, img2, img3] ---
+                # En el nuevo SDK, contents debe ser una lista de partes
                 contenido_request = [prompt_actual] + archivos_subidos_obj
                 
-                respuesta = model.generate_content(
-                    contenido_request,
-                    generation_config={"temperature": 0.0, "max_output_tokens": 65536},
-                    request_options={"timeout": 3600}
+                # NUEVA LLAMADA DE GENERACIÓN
+                respuesta = client.models.generate_content(
+                    model=NOMBRE_MODELO,
+                    contents=contenido_request,
+                    config=types.GenerateContentConfig(
+                        temperature=0.0,
+                        max_output_tokens=65536,
+                        response_mime_type="application/json",
+                        tools=[types.Tool(code_execution=types.ToolCodeExecution())],
+                        thinking_config=types.ThinkingConfig(thinking_level="high")
+                    )
                 )
                 
                 fin_proceso = time.time()
                 tiempo_segundos = fin_proceso - inicio_proceso
+
+                print(f"\n[RAW GEMINI]: {respuesta.text[:1000]}", flush=True)
                 
                 # --- LÓGICA DE PARSING Y DEDUPLICACIÓN ---
                 texto_respuesta = limpiar_respuesta_json(respuesta.text)
@@ -738,6 +817,12 @@ Usa esta información para ubicarte en la primera página (contexto visual). NO 
                 # Métricas
                 input_tok = respuesta.usage_metadata.prompt_token_count
                 output_tok = respuesta.usage_metadata.candidates_token_count
+                
+                with lock_resultados:
+                    contexto_compartido["tokens_fase1_in"] = contexto_compartido.get("tokens_fase1_in", 0) + input_tok
+                    contexto_compartido["tokens_fase1_out"] = contexto_compartido.get("tokens_fase1_out", 0) + output_tok
+                    contexto_compartido["tiempo_fase1"] = contexto_compartido.get("tiempo_fase1", 0.0) + tiempo_segundos
+                
                 print(f" [OK] T:{tiempo_segundos:.2f}s | In:{input_tok} Out:{output_tok}", flush=True)
 
             except json.JSONDecodeError:
@@ -782,8 +867,8 @@ def auditoria_espacial(ruta_pdf, transaccion, indice_ocurrencia=0, mapa_columnas
     descripcion = transaccion.get("Nombre de la transaccion", "").upper()
     
     # Variantes de formato
-    monto_fmt = "{:,.2f}".format(monto_float)
-    monto_simple = "{:.2f}".format(monto_float)
+    monto_fmt = "{:,.2f}".format(abs(monto_float))
+    monto_simple = "{:.2f}".format(abs(monto_float))
     variantes_monto = [monto_fmt, monto_simple, monto_fmt.replace(".00", "")]
 
     # Tokens de descripción (palabras clave > 3 letras)
@@ -799,9 +884,13 @@ def auditoria_espacial(ruta_pdf, transaccion, indice_ocurrencia=0, mapa_columnas
     
     punto_medio = (x_egr_ref + x_ing_ref) / 2
     buffer = abs(x_ing_ref - x_egr_ref) * 0.15 
-    limite_egresos = punto_medio - buffer
-    limite_ingresos = punto_medio + buffer
-    TOLERANCIA_Y = 6.0 
+    
+    limite_izquierdo = punto_medio - buffer
+    limite_derecho = punto_medio + buffer
+
+    # Determinar qué columna está físicamente a la izquierda
+    egresos_a_la_izq = (x_egr_ref < x_ing_ref)
+    TOLERANCIA_Y = 6.0
 
     candidatos_encontrados = [] # Lista para guardar TODAS las coincidencias
 
@@ -841,13 +930,20 @@ def auditoria_espacial(ruta_pdf, transaccion, indice_ocurrencia=0, mapa_columnas
         # 2. Buscar montos alineados con esas filas
         for word in words:
             texto_limpio = word['text'].replace("$", "").replace(",", "")
+            
+            if texto_limpio.endswith('-'):
+                texto_limpio = "-" + texto_limpio[:-1]
+                
             es_monto = False
             try:
+                # Retiramos el abs() para mantener la precisión estricta de signos matemáticos
                 if float(texto_limpio) == monto_float: es_monto = True
             except:
                 pass
             
-            if not es_monto and word['text'] not in variantes_monto:
+            variantes_negativas = [v + "-" for v in variantes_monto]
+            
+            if not es_monto and word['text'] not in variantes_monto and word['text'] not in variantes_negativas:
                 continue
 
             y_monto = (word['top'] + word['bottom']) / 2
@@ -867,9 +963,6 @@ def auditoria_espacial(ruta_pdf, transaccion, indice_ocurrencia=0, mapa_columnas
                     "x": (word['x0'] + word['x1']) / 2,
                     "word": word
                 })
-    # --- FIN MODIFICACIÓN CACHÉ ---
-
-    # --- LÓGICA DE SELECCIÓN DE DUPLICADOS (INTACTA) ---
     
     if not candidatos_encontrados:
         return 0, "No encontrado", False
@@ -881,14 +974,15 @@ def auditoria_espacial(ruta_pdf, transaccion, indice_ocurrencia=0, mapa_columnas
     if indice_ocurrencia < len(candidatos_encontrados):
         match_final = candidatos_encontrados[indice_ocurrencia]
     else:
-        # CORRECCIÓN CRÍTICA: Evitar fantasmas si el índice pedido no existe
         return 0, "Error: Fantasma inexistente", True
 
     # --- CLASIFICACIÓN DEL MATCH ELEGIDO ---
     x_centro = match_final["x"]
     zona = "Ambiguo"
-    if x_centro < limite_egresos: zona = "Egreso"
-    elif x_centro > limite_ingresos: zona = "Ingreso"
+    if x_centro < limite_izquierdo: 
+        zona = "Egreso" if egresos_a_la_izq else "Ingreso"
+    elif x_centro > limite_derecho: 
+        zona = "Ingreso" if egresos_a_la_izq else "Egreso"
     
     clasif_ia = transaccion.get("Clasificacion", "Desconocido")
     conflicto = False
@@ -935,8 +1029,12 @@ def worker_qwen_consumidor(motor, listas_finales):
     try:
         while True:
             try:
-                item = cola_transacciones.get(timeout=10)
+                item = cola_transacciones.get(timeout=5)
             except queue.Empty:
+                # Si la cola se vacía temporalmente, procesamos lo que haya en el buffer para no estancar la GPU
+                if buffer:
+                    procesar_buffer_qwen(motor, buffer, titular_simple, mi_cuenta_real, listas_finales, CAMPOS_VACIOS_FASE_3)
+                    buffer = []
                 continue
                 
             if item is None: # Fin del proceso
@@ -955,7 +1053,6 @@ def worker_qwen_consumidor(motor, listas_finales):
 
             buffer.append(item)
             
-            # Lotes de 1
             if len(buffer) >= 1:
                 procesar_buffer_qwen(motor, buffer, titular_simple, mi_cuenta_real, listas_finales, CAMPOS_VACIOS_FASE_3)
                 buffer = []
@@ -1468,6 +1565,7 @@ def main():
     # Configurar Modelos
     try:
         model_gemini = configurar_gemini()
+        limpiar_archivos_api()
         motor_qwen = MotorQwen(RUTA_MODELO_QWEN)
     except Exception as e:  
         print(f"Error inicializando modelos: {e}")
@@ -1487,6 +1585,15 @@ def main():
             contexto_compartido["vistos_global"] = set()
             contexto_compartido["ultima_tx_bloque"] = None
             contexto_compartido["mapa_columnas"] = {}
+            
+            # Inicialización de métricas de costos y tiempos
+            contexto_compartido["tokens_fase0_in"] = 0
+            contexto_compartido["tokens_fase0_out"] = 0
+            contexto_compartido["tiempo_fase0"] = 0.0
+            contexto_compartido["tokens_fase1_in"] = 0
+            contexto_compartido["tokens_fase1_out"] = 0
+            contexto_compartido["tiempo_fase1"] = 0.0
+            contexto_compartido["inicio_procesamiento"] = time.time()
         
         evento_titular_listo.clear()
         
@@ -1502,8 +1609,81 @@ def main():
         
         # Guardar
         guardar_resultados_finales(DIR_OUTPUT, archivo)
+        guardar_registro_costos(archivo.stem)
         
         time.sleep(2)
+
+# -----------------------------------------------------------------------------
+# FUNCIÓN DE GUARDADO DE REGISTRO DE COSTOS (CSV)
+# -----------------------------------------------------------------------------
+def guardar_registro_costos(pdf_name):
+    directorio_csv = Path("/home/endless/FUNCIONALIDADES/PROYECTO EXTRACTOR")
+    directorio_csv.mkdir(parents=True, exist_ok=True)
+    archivo_csv = directorio_csv / "registro_costos.csv"
+    existe = archivo_csv.exists()
+
+    with lock_resultados:
+        datos_gen = contexto_compartido.get("datos_generales", {})
+        banco = datos_gen.get("banco_detectado", "NO_DETECTADO")
+        empresa = datos_gen.get("nombre_empresa_detectado", pdf_name)
+        if not empresa or "No detectado" in empresa:
+            empresa = pdf_name
+            
+        t_in_0 = contexto_compartido.get("tokens_fase0_in", 0)
+        t_out_0 = contexto_compartido.get("tokens_fase0_out", 0)
+        tiempo_f0 = contexto_compartido.get("tiempo_fase0", 0.0)
+        
+        t_in_1 = contexto_compartido.get("tokens_fase1_in", 0)
+        t_out_1 = contexto_compartido.get("tokens_fase1_out", 0)
+        tiempo_f1 = contexto_compartido.get("tiempo_fase1", 0.0)
+        
+        inicio = contexto_compartido.get("inicio_procesamiento", time.time())
+
+    tiempo_total = time.time() - inicio
+    fecha_hora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Cálculos monetarios ($0.50 input / $3.00 output por millón)
+    costo_in_0 = (t_in_0 / 1000000) * 0.50
+    costo_out_0 = (t_out_0 / 1000000) * 3.00
+    costo_in_1 = (t_in_1 / 1000000) * 0.50
+    costo_out_1 = (t_out_1 / 1000000) * 3.00
+    costo_total = costo_in_0 + costo_out_0 + costo_in_1 + costo_out_1
+
+    try:
+        with open(archivo_csv, mode='a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            # Escribir cabecera solo si el archivo es nuevo
+            if not existe:
+                writer.writerow([
+                    "Fecha_Hora", "Banco", "Empresa", "Tiempo_Total_Procesamiento", 
+                    "Modelo_Coordenadas", "Tiempo_Respuesta_Coord", "Input_Tokens_Coord", "Output_Tokens_Coord", 
+                    "Costo_Input_Coord", "Costo_Output_Coord", 
+                    "Modelo_Transacciones", "Tiempo_Respuesta_Trans", "Input_Tokens_Trans", "Output_Tokens_Trans", 
+                    "Costo_Input_Trans", "Costo_Output_Trans", "Costo_Total_Operacion"
+                ])
+
+            writer.writerow([
+                fecha_hora,
+                banco,
+                empresa,
+                f"{tiempo_total:.2f} s",
+                NOMBRE_MODELO,
+                f"{tiempo_f0:.2f} s",
+                t_in_0,
+                t_out_0,
+                f"${costo_in_0:.6f}",
+                f"${costo_out_0:.6f}",
+                NOMBRE_MODELO,
+                f"{tiempo_f1:.2f} s",
+                t_in_1,
+                t_out_1,
+                f"${costo_in_1:.6f}",
+                f"${costo_out_1:.6f}",
+                f"${costo_total:.6f}"
+            ])
+        print(f"\n[COSTOS] Registro guardado en CSV. (Banco: {banco}) | Costo de operación: ${costo_total:.6f} USD", flush=True)
+    except Exception as e:
+        print(f"\n[COSTOS] ✗ Error al guardar el CSV de costos: {e}", flush=True)
 
 # -----------------------------------------------------------------------------
 # MAIN PARA API ORQUESTADOR
@@ -1522,6 +1702,7 @@ def main_extraction_ia(ruta_pdf: str, directorio_salida: str) -> dict:
     try:
         # Configurar
         model_gemini = configurar_gemini()
+        limpiar_archivos_api()
         motor_qwen = MotorQwen(RUTA_MODELO_QWEN)
         
         # Limpieza previa
@@ -1543,6 +1724,15 @@ def main_extraction_ia(ruta_pdf: str, directorio_salida: str) -> dict:
             contexto_compartido["ultima_tx_bloque"] = None
             contexto_compartido["mapa_columnas"] = {}
             
+            # Inicialización de métricas de costos y tiempos
+            contexto_compartido["tokens_fase0_in"] = 0
+            contexto_compartido["tokens_fase0_out"] = 0
+            contexto_compartido["tiempo_fase0"] = 0.0
+            contexto_compartido["tokens_fase1_in"] = 0
+            contexto_compartido["tokens_fase1_out"] = 0
+            contexto_compartido["tiempo_fase1"] = 0.0
+            contexto_compartido["inicio_procesamiento"] = time.time()
+            
         evento_titular_listo.clear()
         
         # Hilos
@@ -1557,6 +1747,7 @@ def main_extraction_ia(ruta_pdf: str, directorio_salida: str) -> dict:
         
         # Guardado final
         guardar_resultados_finales(directorio_salida, pdf_path)
+        guardar_registro_costos(pdf_path.stem)
         
         if temp_dir.exists():
             shutil.rmtree(temp_dir)

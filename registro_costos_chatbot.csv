@@ -1,8 +1,0 @@
-Fecha_Hora,Cliente_ID,Usuario_ID,Funcion,Descripcion,Modelo,Tiempo_Respuesta,Input_Tokens,Output_Tokens,Costo_Input,Costo_Output,Costo_Total_Operacion
-2026-06-06 13:25:51,0,0,generar_respuesta_chat,Respuesta de chat CFO al usuario,gemini-3-flash-preview,2.64 s,7743,27,$0.003871,$0.000081,$0.003953
-2026-06-06 14:55:35,0,0,generar_respuesta_chat,Respuesta de chat CFO al usuario,gemini-3-flash-preview,2.40 s,36289,34,$0.018145,$0.000102,$0.018247
-2026-06-06 15:00:16,0,0,generar_respuesta_chat,Respuesta de chat CFO al usuario,gemini-3-flash-preview,9.81 s,36347,697,$0.018173,$0.002091,$0.020264
-2026-06-06 15:14:42,0,0,generar_respuesta_chat,Respuesta de chat CFO al usuario,gemini-3-flash-preview,14.48 s,37070,778,$0.018535,$0.002334,$0.020869
-2026-06-06 15:15:26,0,0,generar_respuesta_chat,Respuesta de chat CFO al usuario,gemini-3-flash-preview,9.12 s,37871,787,$0.018936,$0.002361,$0.021297
-2026-06-06 15:38:12,0,0,generar_respuesta_chat,Respuesta de chat CFO al usuario,gemini-3-flash-preview,12.99 s,38668,746,$0.019334,$0.002238,$0.021572
-2026-06-06 15:43:05,0,0,generar_respuesta_chat,Respuesta de chat CFO al usuario,gemini-3-flash-preview,2.99 s,23066,37,$0.011533,$0.000111,$0.011644

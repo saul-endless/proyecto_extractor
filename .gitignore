@@ -1,1 +1,6 @@
 gemini_keys.py
+input_chatbot/
+output/
+input/
+registro_costos_*.csv
+__pycache__/

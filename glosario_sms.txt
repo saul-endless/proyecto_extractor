@@ -1,0 +1,822 @@
+================================================================================
+GLOSARIO COMPLETO DEL PORTAL SMS — ENDLESS INNOVATION
+Documentación para agente de soporte
+================================================================================
+
+Este documento describe todas las funciones del portal SMS de Endless Innovation
+basándose únicamente en lo que muestra la interfaz real. Cubre rutas de acceso,
+campos requeridos, qué hace cada función y notas importantes para soporte.
+
+--------------------------------------------------------------------------------
+ÍNDICE
+--------------------------------------------------------------------------------
+1. DASHBOARD
+2. CAMPAÑAS — LISTA
+3. CAMPAÑAS — CREAR CAMPAÑA PARA CONTACTOS
+4. CAMPAÑAS — CREAR CAMPAÑA PERSONALIZADA
+5. MENSAJES RÁPIDOS
+6. CONTACTOS — VER Y BUSCAR
+7. CONTACTOS — AGREGAR
+8. CONTACTOS — IMPORTAR DESDE EXCEL
+9. CONTACTOS — EXPORTAR A EXCEL
+10. CONTACTOS — CAMBIAR LISTA
+11. CONTACTOS — ENVIAR MENSAJE RÁPIDO DESDE TABLA
+12. CONTACTOS — EDITAR
+13. CONTACTOS — ELIMINAR
+14. LISTAS DE CONTACTOS
+15. BLACK LIST
+16. USUARIOS
+17. REPORTE DE MENSAJES POR NÚMERO
+18. REPORTE DE CRÉDITOS
+19. MONITOREO DE RED — REPORTE DE CONEXIÓN
+20. LEVANTAR TICKETS
+
+================================================================================
+INFORMACIÓN GENERAL DE NAVEGACIÓN
+================================================================================
+
+El portal tiene un sidebar (barra lateral izquierda) con íconos siempre visibles.
+Al pasar el cursor sobre cada ícono aparece un menú desplegable con las
+sub-secciones disponibles.
+
+Íconos del sidebar (de arriba hacia abajo):
+  1. Ícono de calendario/campañas   → Menú: Campañas, Crear campañas, Mensajes rápidos
+  2. Ícono de personas/contactos    → Menú: Usuarios, Contactos, Black List
+  3. Ícono de gráfica/reportes      → Menú: Reporte de créditos, Reporte de Mensajes
+  4. Ícono de monitor/monitoreo     → Menú: Reporte de Conexión
+  5. Ícono de ticket/soporte        → Menú: (acceso a tickets)
+
+Header superior derecho:
+  - Nombre del usuario + empresa + rol
+  - Avatar con iniciales del usuario
+  - Botón de cerrar sesión (ícono de salida en la parte inferior del sidebar)
+
+================================================================================
+1. DASHBOARD
+================================================================================
+
+RUTA DE ACCESO: Pantalla principal al iniciar sesión
+
+QUÉ MUESTRA:
+  - Saludo personalizado: "Bienvenido, [Nombre del usuario]"
+  - Subtítulo: "Canales y elementos disponibles para operar en este portal."
+  - Etiquetas (pills) de los canales disponibles: SMS, Fortinet, Reportes, Contactos
+  - Seis tarjetas de acceso rápido:
+      1. Campañas           — "Crear, programar y monitorear envíos SMS."
+      2. Mensajes rápidos   — "Envío inmediato a tus contactos."
+      3. Contactos          — "Gestión de listas, importación y limpieza."
+      4. Reporte de mensajes — "Trazabilidad por número y estatus."
+      5. Monitoreo de Red   — "Estado operativo de la red Fortinet."
+      6. Reporte de créditos — "Saldo y consumo por canal."
+
+NOTAS PARA EL AGENTE:
+  - Cada tarjeta es un acceso directo al módulo correspondiente.
+  - Las etiquetas de canales indican qué servicios tiene habilitados ese cliente.
+  - Si el usuario no ve alguna tarjeta, puede ser un problema de permisos por rol.
+
+================================================================================
+2. CAMPAÑAS — LISTA
+================================================================================
+
+RUTA DE ACCESO: Sidebar → Campañas → Campañas
+
+QUÉ MUESTRA:
+  Tabla con todas las campañas creadas por el cliente, con las siguientes columnas:
+    - Nombre          : nombre de la campaña
+    - Mensaje         : texto del SMS que se envió
+    - Total           : número total de destinatarios
+    - Enviados        : mensajes que salieron correctamente
+    - Fallidos        : mensajes que no se pudieron entregar
+    - Entregados      : mensajes confirmados como recibidos por el dispositivo
+    - Estado          : estado actual de la campaña
+    - Programada para : fecha y hora en que se programó o ejecutó
+    - Acciones        : íconos para ver detalle y eliminar
+
+ESTADOS POSIBLES DE UNA CAMPAÑA:
+    - Programada  : agendada, aún no se ha ejecutado
+    - En proceso  : se está enviando en este momento
+    - Completada  : todos los envíos terminaron
+    - Fallida     : ocurrió un error en el proceso de envío
+
+FILTROS Y PAGINACIÓN:
+    - Búsqueda por nombre de campaña
+    - Selector de registros por página (10, 25, 50)
+    - Botones Anterior / Siguiente
+    - Indicador: "Mostrando X de Y campañas (Página N de M)"
+
+ACCIONES POR CAMPAÑA:
+    - Ver detalle : abre el detalle completo con resultados por número
+    - Eliminar    : borra la campaña (pide confirmación)
+
+NOTAS PARA EL AGENTE:
+    - Una campaña completada no se puede editar ni reenviar.
+    - Si una campaña aparece como "Fallida" revisar créditos disponibles y
+      estado de la red en el módulo de Monitoreo.
+
+================================================================================
+3. CAMPAÑAS — CREAR CAMPAÑA PARA CONTACTOS
+================================================================================
+
+RUTA DE ACCESO: Sidebar → Campañas → Crear campañas → sección izquierda
+                "Campaña para contactos"
+
+DESCRIPCIÓN:
+    Permite crear un envío masivo de SMS usando contactos que ya están
+    guardados en el sistema organizados en listas.
+
+FORMULARIO — 3 PESTAÑAS:
+
+  PESTAÑA 1: Datos generales
+    Campo requerido  : Nombre de la campaña (texto libre)
+    Campo requerido  : Mensaje (texto del SMS que recibirán todos los destinatarios)
+
+  PESTAÑA 2: Destino
+    Seleccionar una o varias listas de contactos previamente creadas en el módulo
+    de Contactos. Botón "Agregar contactos" para confirmar la selección y avanzar.
+
+  PESTAÑA 3: Programación
+    Opción : Envío inmediato (sin fecha)
+    Opción : Envío programado — seleccionar fecha y hora específica
+
+CAMPOS OBLIGATORIOS:
+    1. Nombre de la campaña
+    2. Texto del mensaje SMS
+    3. Al menos una lista de contactos como destino
+
+CAMPOS OPCIONALES:
+    - Fecha y hora de programación (si no se especifica, envía de inmediato)
+
+NOTAS IMPORTANTES:
+    - El mensaje debe ser texto plano, sin HTML ni caracteres especiales complejos.
+    - Cada número al que se envíe descuenta 1 crédito del saldo del canal.
+    - Si un número destino está en la blacklist, se omite automáticamente.
+    - No se puede editar una campaña una vez enviada o en proceso.
+    - Sin completar el paso "Agregar contactos" no es posible crear la campaña.
+
+================================================================================
+4. CAMPAÑAS — CREAR CAMPAÑA PERSONALIZADA
+================================================================================
+
+RUTA DE ACCESO: Sidebar → Campañas → Crear campañas → sección derecha
+                "Campaña personalizada"
+
+DESCRIPCIÓN:
+    Permite crear envíos donde cada destinatario recibe un mensaje diferente
+    con sus propios datos personalizados (nombre, deuda, número, etc.),
+    usando una plantilla de columnas y un archivo con los datos.
+
+FORMULARIO — 4 PESTAÑAS:
+
+  PESTAÑA 1: Crear plantilla
+    Define las columnas que tendrá el archivo de destinatarios.
+    Ejemplo de columnas: telefono, nombre, deuda, fecha.
+
+    Opciones:
+      - Dropdown "Elegir plantilla" : seleccionar una plantilla ya creada
+      - Botón "Nueva"               : crear una nueva plantilla
+      - Botón "Borrar"              : eliminar la plantilla seleccionada
+      - Switch (toggle)             : activar para crear una plantilla nueva
+        Texto del switch: "Si no lo has hecho activa el switch para crear una
+        plantilla nueva"
+
+    Campo requerido : Nombre de la plantilla (al crear nueva)
+    Campo requerido : Definición de columnas
+
+  PESTAÑA 2: Destinos
+    Cargar el archivo con los datos de los destinatarios.
+    El archivo debe tener exactamente las columnas definidas en la plantilla.
+    Botón "Agregar Contactos" para confirmar la carga.
+
+  PESTAÑA 3: Datos generales
+    Campo requerido : Nombre de la campaña
+    Campo requerido : Mensaje con variables dinámicas
+      Ejemplo: "Estimado {nombre}, tu cuenta presenta un saldo de {deuda}.
+      Por favor reporta tu pago al {telefono} para evitar el corte de servicio."
+      El sistema reemplaza {nombre}, {deuda}, {telefono} con el valor de cada
+      fila del archivo para ese destinatario.
+
+  PESTAÑA 4: Programación
+    Opción : Envío inmediato
+    Opción : Envío programado con fecha y hora
+
+CAMPOS OBLIGATORIOS:
+    1. Plantilla seleccionada o creada con sus columnas
+    2. Archivo con los destinatarios y sus datos (formato que coincida con plantilla)
+    3. Nombre de la campaña
+    4. Mensaje con las variables entre llaves {}
+
+CAMPOS OPCIONALES:
+    - Fecha y hora de programación
+
+QUÉ ES UNA PLANTILLA:
+    Es la definición de las columnas que se esperan en el archivo de envío.
+    Se reutiliza en múltiples campañas que tengan la misma estructura de datos.
+    Se guarda con un nombre único por cliente.
+
+NOTAS IMPORTANTES:
+    - Las columnas del archivo deben coincidir exactamente con las de la plantilla.
+    - Las variables en el mensaje deben escribirse entre llaves: {nombre_columna}.
+    - Si una columna no tiene valor en una fila, esa variable quedará vacía en el SMS.
+    - Cada SMS enviado descuenta 1 crédito, aunque el contenido sea personalizado.
+
+================================================================================
+5. MENSAJES RÁPIDOS
+================================================================================
+
+RUTA DE ACCESO: Sidebar → Campañas → Mensajes rápidos
+
+DESCRIPCIÓN:
+    Envío inmediato y manual de SMS a uno o varios números sin necesidad de
+    crear una campaña ni usar listas de contactos.
+
+SECCIÓN IZQUIERDA — Teléfonos:
+    - Campo de texto: ingresar número de teléfono
+    - Botón "+" (verde)  : agregar otro campo de número
+    - Botón "–" (rojo)   : eliminar el campo correspondiente
+    - Se pueden ingresar múltiples números antes de enviar
+
+SECCIÓN DERECHA — Mensaje:
+    - Área de texto para redactar el SMS
+    - El mismo mensaje se envía a todos los números ingresados
+    - Botón "Enviar" (azul con ícono de play)
+
+CAMPOS OBLIGATORIOS:
+    1. Al menos un número de teléfono
+    2. Texto del mensaje
+
+ELEMENTO VISUAL:
+    A la derecha de la pantalla se muestra la ilustración de un teléfono móvil
+    simulando cómo verá el destinatario el mensaje en su dispositivo.
+
+DIFERENCIA CON UNA CAMPAÑA:
+    - No queda registrado como campaña en el historial de campañas.
+    - No requiere listas ni plantillas.
+    - Es para envíos puntuales, urgentes o de prueba.
+    - También descuenta créditos por cada número al que se envíe.
+
+NOTAS PARA EL AGENTE:
+    - Si el usuario quiere enviar a muchos números frecuentemente, recomendar
+      crear una campaña para tener historial y trazabilidad.
+    - Si el número está en blacklist el mensaje no llegará aunque se envíe aquí.
+
+================================================================================
+6. CONTACTOS — VER Y BUSCAR
+================================================================================
+
+RUTA DE ACCESO: Sidebar → Contactos → Contactos
+
+QUÉ MUESTRA:
+    Tabla con todos los contactos del cliente.
+
+FILTRO SUPERIOR:
+    - Dropdown "Todas las listas" : filtrar contactos por una lista específica
+
+BARRA DE BÚSQUEDA:
+    - Campo de texto + botón lupa
+    - Busca por nombre, teléfono o correo
+
+COLUMNAS DE LA TABLA:
+    - Checkbox     : para selección múltiple
+    - Lista        : nombre de la lista a la que pertenece el contacto
+    - Nombre       : nombre del contacto
+    - Teléfono     : número de celular
+    - Correo       : dirección de email
+    - Acciones     : sobre (enviar SMS), ícono info, lápiz (editar), basura (eliminar)
+
+PAGINACIÓN:
+    - Selector "Por página" (10, 25, 50)
+    - Botones Anterior / Siguiente
+    - Indicador: "Mostrando X de Y contactos (Página N de M)"
+
+BARRA DE ACCIONES SUPERIOR (sobre la tabla):
+    - Agregar contacto(s)
+    - Listas
+    - Importar excel
+    - Exportar a excel
+    - Cambiar lista de contactos
+    - Enviar mensaje rápido
+    - Eliminar contactos
+
+================================================================================
+7. CONTACTOS — AGREGAR
+================================================================================
+
+RUTA DE ACCESO: Módulo Contactos → Botón "Agregar contacto(s)"
+
+CAMPOS DEL FORMULARIO:
+    Obligatorio : Nombre del contacto
+    Obligatorio : Teléfono (debe ser único dentro del cliente)
+    Opcional    : Correo electrónico
+    Obligatorio : Lista destino (seleccionar a qué lista se agrega)
+
+NOTAS IMPORTANTES:
+    - El número de teléfono no puede repetirse dentro del mismo cliente.
+    - Si el número ya existe en la blacklist, el contacto se guarda pero
+      los SMS no llegarán a ese número.
+    - El contacto quedará activo (activo = true) por defecto.
+
+================================================================================
+8. CONTACTOS — IMPORTAR DESDE EXCEL
+================================================================================
+
+RUTA DE ACCESO: Módulo Contactos → Botón "Importar excel"
+
+DESCRIPCIÓN:
+    Carga masiva de contactos desde un archivo .xlsx o .csv.
+
+PROCESO:
+    1. Hacer clic en "Importar excel"
+    2. Seleccionar el archivo desde el explorador de archivos
+    3. El sistema lee las columnas y mapea los datos automáticamente
+    4. Los contactos se agregan a la lista indicada en el archivo
+
+COLUMNAS ESPERADAS EN EL ARCHIVO:
+    - nombre    : nombre del contacto
+    - telefono  : número de teléfono (obligatorio, único)
+    - correo    : email del contacto (opcional)
+    - lista     : nombre de la lista destino
+
+FORMATOS SOPORTADOS:
+    - Excel (.xlsx)
+    - CSV (.csv)
+
+NOTAS IMPORTANTES:
+    - El archivo no debe tener filas vacías al inicio.
+    - Los números duplicados se ignoran o actualizan según configuración.
+    - La lista indicada en el archivo debe existir previamente en el sistema.
+    - Si la columna "lista" no existe en el archivo, los contactos no se asignan
+      a ninguna lista y pueden quedar sin categorizar.
+
+================================================================================
+9. CONTACTOS — EXPORTAR A EXCEL
+================================================================================
+
+RUTA DE ACCESO: Módulo Contactos → Botón "Exportar a excel"
+
+DESCRIPCIÓN:
+    Descarga un archivo .xlsx con los contactos actualmente visibles según
+    el filtro de lista activo.
+
+QUÉ CONTIENE EL ARCHIVO DESCARGADO:
+    - Lista
+    - Nombre
+    - Teléfono
+    - Correo
+
+NOTAS:
+    - Si hay un filtro de lista activo, solo exporta los contactos de esa lista.
+    - Si está en "Todas las listas", exporta todos los contactos del cliente.
+
+================================================================================
+10. CONTACTOS — CAMBIAR LISTA
+================================================================================
+
+RUTA DE ACCESO: Módulo Contactos → Seleccionar contactos → "Cambiar lista de contactos"
+
+DESCRIPCIÓN:
+    Mueve uno o varios contactos de su lista actual a otra lista diferente.
+
+PROCESO:
+    1. Seleccionar uno o más contactos usando el checkbox de la tabla
+    2. Hacer clic en el botón "Cambiar lista de contactos"
+    3. Seleccionar la lista destino del dropdown
+    4. Confirmar
+
+NOTAS:
+    - La lista destino debe existir previamente.
+    - Los contactos cambian de lista de forma inmediata.
+    - Esta acción no elimina el contacto, solo lo reasigna.
+
+================================================================================
+11. CONTACTOS — ENVIAR MENSAJE RÁPIDO DESDE TABLA
+================================================================================
+
+RUTA DE ACCESO: Módulo Contactos → columna Acciones → ícono de sobre
+
+DESCRIPCIÓN:
+    Abre el módulo de Mensajes Rápidos con el número de ese contacto
+    ya precargado en el campo de teléfono.
+
+PROCESO:
+    1. Localizar el contacto en la tabla
+    2. Hacer clic en el ícono de sobre en la columna Acciones
+    3. El sistema abre Mensajes Rápidos con el número ya ingresado
+    4. Redactar el mensaje y hacer clic en "Enviar"
+
+================================================================================
+12. CONTACTOS — EDITAR
+================================================================================
+
+RUTA DE ACCESO: Módulo Contactos → columna Acciones → ícono de lápiz
+
+DESCRIPCIÓN:
+    Modifica los datos de un contacto existente.
+
+CAMPOS EDITABLES:
+    - Nombre
+    - Teléfono
+    - Correo
+    - Lista a la que pertenece
+
+PROCESO:
+    1. Hacer clic en el ícono de lápiz en la fila del contacto
+    2. Se abre el formulario con los datos actuales
+    3. Modificar los campos deseados
+    4. Guardar cambios
+
+================================================================================
+13. CONTACTOS — ELIMINAR
+================================================================================
+
+RUTA DE ACCESO: Módulo Contactos → columna Acciones → ícono de basura (rojo)
+                O bien: selección múltiple → botón "Eliminar contactos"
+
+ELIMINAR UN SOLO CONTACTO:
+    - Hacer clic en el ícono de basura rojo en la fila del contacto
+    - El sistema pide confirmación antes de borrar
+
+ELIMINAR VARIOS CONTACTOS:
+    - Seleccionar uno o más contactos con el checkbox
+    - Hacer clic en el botón "Eliminar contactos" en la barra superior
+    - Confirmar la acción
+
+NOTAS IMPORTANTES:
+    - La eliminación es irreversible.
+    - Los contactos eliminados no se pueden recuperar.
+    - Si el contacto tenía envíos históricos, esos registros permanecen en
+      el reporte de mensajes.
+
+================================================================================
+14. LISTAS DE CONTACTOS
+================================================================================
+
+RUTA DE ACCESO: Sidebar → Contactos → Listas
+                O bien: Módulo Contactos → Botón "Listas"
+
+DESCRIPCIÓN:
+    Las listas son agrupaciones de contactos usadas para segmentar los
+    destinatarios de las campañas SMS.
+
+FUNCIONES DISPONIBLES:
+    - Ver todas las listas del cliente
+    - Crear nueva lista
+    - Eliminar lista
+
+CREAR LISTA:
+    Campo obligatorio : Nombre de la lista (debe ser único dentro del cliente)
+    Al crear, la lista aparece de inmediato en:
+      - El dropdown de filtros de contactos
+      - El selector de destino al crear campañas
+
+ELIMINAR LISTA:
+    - Solo se puede eliminar si la lista no tiene contactos activos.
+    - Primero hay que mover o eliminar los contactos de esa lista.
+
+ESTADOS:
+    - Activa   (activo = true)  : aparece en todos los selectores del portal
+    - Inactiva (activo = false) : no aparece en selectores de campaña
+
+EJEMPLOS DE USO TÍPICO:
+    - "Clientes morosos"
+    - "Promotores"
+    - "Clientes VIP"
+    - "Lista persistente QA"
+
+================================================================================
+15. BLACK LIST
+================================================================================
+
+RUTA DE ACCESO: Sidebar → Contactos → Black List
+
+DESCRIPCIÓN:
+    Registro de números de teléfono bloqueados que nunca recibirán SMS,
+    aunque estén incluidos en una campaña o en un mensaje rápido.
+
+FUNCIONES DISPONIBLES:
+    - Ver números en blacklist
+    - Agregar número a blacklist
+    - Eliminar número de blacklist
+
+AGREGAR A BLACKLIST:
+    Campo obligatorio : Número de teléfono
+    Campo opcional    : Fecha de expiración (expira_en)
+      Si se indica fecha de expiración, el bloqueo se levanta automáticamente
+      en esa fecha. Si no se indica, el bloqueo es permanente.
+
+CÓMO AFECTA A LOS ENVÍOS:
+    - Cualquier número en blacklist se omite automáticamente al procesar
+      una campaña o un mensaje rápido.
+    - En el reporte de mensajes puede quedar marcado como fallido con
+      el motivo "número bloqueado".
+
+CASO DE USO TÍPICO:
+    Un usuario final solicitó no recibir más mensajes (baja voluntaria).
+    Se agrega su número a la blacklist para respetar su solicitud y evitar
+    problemas por envíos no deseados.
+
+================================================================================
+16. USUARIOS
+================================================================================
+
+RUTA DE ACCESO: Sidebar → Contactos → Usuarios
+
+DESCRIPCIÓN:
+    Gestión de las cuentas de usuario que tienen acceso al portal.
+    Solo usuarios con rol de administrador pueden acceder a este módulo.
+
+FUNCIONES DISPONIBLES:
+    - Ver lista de usuarios
+    - Crear usuario
+    - Editar usuario
+    - Eliminar usuario
+
+CAMPOS PARA CREAR USUARIO:
+    Obligatorio : Correo electrónico (debe ser único)
+    Obligatorio : Contraseña
+    Obligatorio : Rol
+    Opcional    : Límite de mensajes (cuántos SMS puede enviar este usuario)
+    Opcional    : Grupo de usuario
+
+ROLES:
+    Definidos en el sistema. Controlan a qué secciones del portal puede
+    acceder el usuario y qué acciones puede ejecutar.
+    Ejemplos: admin, operador.
+
+LÍMITE DE MENSAJES:
+    Número máximo de SMS que ese usuario puede enviar en total.
+    Si el usuario llega a su límite, sus campañas y mensajes rápidos
+    son rechazados hasta que un admin aumente el límite o lo reinicie.
+
+GRUPOS DE USUARIO:
+    Permiten agrupar varios usuarios para gestión conjunta.
+    Un usuario puede pertenecer a varios grupos simultáneamente.
+    Los grupos se gestionan en la tabla usuario_grupos.
+
+================================================================================
+17. REPORTE DE MENSAJES POR NÚMERO
+================================================================================
+
+RUTA DE ACCESO: Sidebar → Reportes → Reporte de Mensajes
+
+DESCRIPCIÓN:
+    Muestra el historial completo de todos los SMS enviados a un número
+    de teléfono específico, con fecha, hora, contenido y estado.
+
+FILTROS DE BÚSQUEDA:
+    Obligatorio : Teléfono (número a consultar)
+    Opcional    : Fecha desde (dd/mm/yyyy)
+    Opcional    : Fecha hasta  (dd/mm/yyyy)
+    Botón       : "Buscar" para ejecutar la consulta
+
+COLUMNAS DEL RESULTADO:
+    - Teléfono  : número consultado
+    - Fecha     : dd/mm/yyyy
+    - Hora      : hh:mm a.m. / p.m.
+    - Mensaje   : texto completo del SMS enviado
+    - Estado    : badge de color con el estado del envío
+
+ESTADOS DE CADA MENSAJE:
+    - Enviado   : el SMS salió del sistema hacia el operador de telefonía
+    - Entregado : el operador confirmó que llegó al dispositivo del destinatario
+    - Fallido   : no se pudo entregar (causas: número inválido, teléfono apagado,
+                  número en blacklist, créditos insuficientes, error de red)
+    - Pendiente : el mensaje está en cola, aún no ha salido
+
+PAGINACIÓN:
+    - Selector "Por página"
+    - Indicador: "Mostrando X de Y registros"
+    - Botones Anterior / Siguiente
+
+NOTAS PARA EL AGENTE:
+    - Este reporte sirve para verificar si un SMS llegó o no a un número específico.
+    - Si un usuario reporta que no recibió un mensaje, buscar su número aquí
+      y revisar el estado. Si dice "Fallido", verificar si está en blacklist
+      o si había créditos disponibles en ese momento.
+    - La búsqueda sin filtro de fechas devuelve todo el historial disponible.
+
+================================================================================
+18. REPORTE DE CRÉDITOS
+================================================================================
+
+RUTA DE ACCESO: Sidebar → Reportes → Reporte de créditos
+
+DESCRIPCIÓN:
+    Muestra el saldo de créditos SMS disponibles y el consumo realizado
+    hasta la fecha, con una representación visual en gráfica de dona.
+
+GRÁFICA DE DONA:
+    - Verde (Disponibles) : créditos que aún no se han consumido
+    - Rojo  (Usados)      : créditos ya consumidos en envíos
+    - Al pasar el cursor sobre la gráfica se muestra el porcentaje exacto
+    - Botón "Actualizar" (ícono de refresco) en la esquina superior derecha
+      para obtener los datos más recientes en tiempo real
+
+PANEL DE INFORMACIÓN (lado derecho):
+    - Canal               : nombre del canal (ej: "Mensajes SMS")
+    - Créditos disponibles : número exacto de créditos restantes
+    - Mensajes enviados   : total histórico de SMS consumidos
+    - Última actualización : fecha del último refresco de datos
+
+MENSAJE DEL SISTEMA CUANDO LOS CRÉDITOS SE AGOTAN:
+    "Si quieres tener más créditos o te quedaste sin créditos contáctanos
+     al número: 000-0000-0000"
+
+NOTAS PARA EL AGENTE:
+    - Cuando un usuario reporta que sus campañas no se envían, verificar
+      primero si tiene créditos disponibles en este módulo.
+    - Cada SMS enviado (campaña o mensaje rápido) descuenta 1 crédito.
+    - Para recargar créditos, indicar al usuario el número de contacto que
+      aparece en la pantalla de créditos agotados.
+    - Los créditos son por canal. Si el cliente tiene varios canales,
+      cada uno tiene su propio saldo independiente.
+
+================================================================================
+19. MONITOREO DE RED — REPORTE DE CONEXIÓN
+================================================================================
+
+RUTA DE ACCESO: Sidebar → Monitorización → Reporte de Conexión
+
+DESCRIPCIÓN:
+    Muestra el estado operativo en tiempo real e histórico de la infraestructura
+    de red Fortinet que soporta los envíos SMS. Permite detectar problemas de
+    conectividad que puedan explicar fallos en campañas.
+
+FILTROS DISPONIBLES:
+    Opcional : Desde (fecha, formato dd/mm/yyyy)
+    Opcional : Hasta  (fecha, formato dd/mm/yyyy)
+    Opcional : Horas   (dropdown — elegir últimas N horas)
+    Opcional : Días    (dropdown — elegir últimos N días)
+    Opcional : Semanas (dropdown — elegir últimas N semanas)
+    Opcional : Meses   (dropdown — elegir últimos N meses)
+    Opcional : Seleccionar servidor (dropdown con los servidores disponibles)
+    Botón    : "Buscar" para aplicar los filtros
+
+    También existe la etiqueta "Datos recientes desde" con los selectores
+    de Horas/Días/Semanas/Meses para ver los últimos N períodos sin necesidad
+    de especificar fechas exactas.
+
+GRÁFICAS MOSTRADAS (4 en total):
+    1. Uso de CPU
+       - Eje Y: porcentaje (0 a 100%)
+       - Eje X: horas del día
+       - Muestra qué tan cargado está el procesador del servidor
+
+    2. Estado del enlace
+       - Eje Y: porcentaje (0 a 100%)
+       - Eje X: horas del día
+       - Muestra la disponibilidad y calidad de la conexión de red
+
+    3. Consumo de ancho de banda
+       - Eje Y: porcentaje (0 a 100%)
+       - Eje X: horas del día
+       - Muestra el tráfico de datos que pasa por la red
+
+    4. Disponibilidad (Uptime)
+       - Eje Y: porcentaje (0 a 100%)
+       - Eje X: horas del día
+       - Muestra el porcentaje del tiempo que el servidor estuvo en línea
+
+NOTAS PARA EL AGENTE:
+    - Este módulo es para el canal Fortinet, no para el canal SMS directamente.
+    - Si un usuario reporta fallas masivas en envíos, revisar este módulo para
+      ver si hubo caídas de uptime o picos de CPU en el mismo horario.
+    - Caídas del "Estado del enlace" por debajo del 80% en el momento de
+      una campaña explican mensajes fallidos masivos.
+    - Este módulo es de solo lectura, no permite hacer ninguna acción.
+
+================================================================================
+20. LEVANTAR TICKETS
+================================================================================
+
+RUTA DE ACCESO: Sidebar → (ícono de ticket, último en la lista) → Levantar Tickets
+
+DESCRIPCIÓN:
+    Formulario para que los usuarios reporten problemas técnicos o funcionales
+    con cualquier módulo del portal. Los tickets llegan al equipo de soporte
+    de Endless Innovation.
+
+SUBTÍTULO DE LA PANTALLA:
+    "Reporta problemas referente a los módulos disponibles dentro del portal."
+
+FORMULARIO — 3 SECCIONES:
+
+  SECCIÓN 1: Datos de la persona
+    Obligatorio : Nombre completo
+                  (placeholder: "Ej. Carlos López")
+    Obligatorio : Correo electrónico
+                  (placeholder: "mail@mail.com")
+    Obligatorio : Número telefónico
+                  (placeholder: "xx-xxxx-xxxx")
+
+  SECCIÓN 2: Información general
+    Obligatorio : Tipo de problema (dropdown)
+                  Opciones visibles: Campañas (y otras según configuración)
+                  Probable lista completa: Campañas, Mensajes rápidos, Contactos,
+                  Reportes, Monitoreo, Créditos, Otro
+    Obligatorio : Describe el problema
+                  Área de texto libre para explicar con detalle qué pasó,
+                  cuándo ocurrió y qué se esperaba que pasara.
+
+  SECCIÓN 3: Agregar evidencias (opcional)
+    Opcional    : Archivo adjunto
+                  Botón "Choose Files" — soporta capturas de pantalla,
+                  documentos, archivos de error, etc.
+                  Texto: "Archivo no seleccionado" cuando no hay archivo.
+
+BOTÓN PRINCIPAL:
+    "Levantar ticket" (botón verde con ícono)
+    Al enviarlo, el sistema registra el ticket y genera un folio de seguimiento.
+
+RECOMENDACIONES PARA EL AGENTE:
+    - Pedir siempre al usuario que incluya en la descripción:
+        * Nombre exacto de la campaña o acción que falló
+        * Fecha y hora aproximada del problema
+        * Mensaje de error exacto que apareció en pantalla (si hubo)
+        * Qué estaba haciendo cuando ocurrió el error
+    - Recomendar adjuntar capturas de pantalla del error.
+    - Cuanto más detalle incluya el usuario, más rápido lo resuelve el equipo técnico.
+    - El campo de correo es importante para que el equipo pueda contactar al usuario.
+
+================================================================================
+TABLA DE RUTAS RÁPIDAS — RESUMEN
+================================================================================
+
+MÓDULO                    RUTA EN EL PORTAL
+─────────────────────────────────────────────────────────────────────
+Dashboard                 Pantalla principal al iniciar sesión
+Lista de campañas         Sidebar → Campañas → Campañas
+Crear campaña             Sidebar → Campañas → Crear campañas
+Mensajes rápidos          Sidebar → Campañas → Mensajes rápidos
+Contactos                 Sidebar → Contactos → Contactos
+Listas                    Sidebar → Contactos → Listas
+Black List                Sidebar → Contactos → Black List
+Usuarios                  Sidebar → Contactos → Usuarios
+Reporte de mensajes       Sidebar → Reportes → Reporte de Mensajes
+Reporte de créditos       Sidebar → Reportes → Reporte de créditos
+Monitoreo de red          Sidebar → Monitorización → Reporte de Conexión
+Levantar tickets          Sidebar → (ícono ticket) → Levantar Tickets
+
+================================================================================
+TABLA DE CAMPOS OBLIGATORIOS POR FUNCIÓN
+================================================================================
+
+FUNCIÓN                        CAMPOS OBLIGATORIOS
+─────────────────────────────────────────────────────────────────────
+Campaña para contactos         Nombre, Mensaje, Lista destino
+Campaña personalizada          Plantilla, Archivo, Nombre, Mensaje con variables
+Mensaje rápido                 Teléfono(s), Mensaje
+Agregar contacto               Nombre, Teléfono, Lista
+Crear lista                    Nombre de la lista
+Agregar a blacklist            Teléfono
+Crear usuario                  Correo, Contraseña, Rol
+Reporte de mensajes            Teléfono
+Levantar ticket                Nombre, Correo, Teléfono, Tipo de problema, Descripción
+
+================================================================================
+ESQUEMA DE LA BASE DE DATOS (referencia técnica)
+================================================================================
+
+Las tablas que soportan el portal son:
+
+clientes              : empresas/tenants del sistema
+usuarios              : cuentas con acceso al portal
+roles                 : tipos de rol (admin, operador, etc.)
+grupos_usuario        : grupos para clasificar usuarios
+usuario_grupos        : relación muchos a muchos usuarios-grupos
+canales               : tipos de canal de envío (SMS, Fortinet, etc.)
+creditos              : saldo de créditos por cliente y canal
+contactos             : base de datos de destinatarios
+listas_contactos      : agrupaciones de contactos
+blacklist_contactos   : números bloqueados con fecha de expiración opcional
+campanas              : campañas de envío masivo
+detalle_envios        : registro individual de cada SMS enviado
+plantillas_campana    : plantillas de columnas para campañas personalizadas
+refresh_tokens        : tokens de sesión de usuarios
+dlq_webhooks          : cola de webhooks fallidos con payload y error
+
+Campos clave de aislamiento (presentes en la mayoría de tablas):
+  cliente_id : identifica a qué cliente pertenece cada registro
+  usuario_id : identifica qué usuario creó o está asociado al registro
+
+================================================================================
+CONTEXTO DE SESIÓN — CAMPOS QUE EL SISTEMA REQUIERE AL HACER LOGIN
+================================================================================
+
+Para que el portal funcione correctamente, al autenticarse se deben conocer
+y mantener disponibles durante toda la sesión:
+
+  cliente_id      : identifica el tenant. Filtra TODOS los datos del cliente.
+                    Sin este valor no se puede hacer ninguna consulta segura.
+  usuario_id      : identifica al usuario. Necesario para auditoría y permisos.
+  rol_id          : determina qué módulos y acciones puede ver y ejecutar.
+  rol_nombre      : nombre del rol para mostrar en pantalla (ej: "admin")
+  mensaje_limite  : límite de SMS que puede enviar el usuario
+  canales         : lista de canales habilitados para ese cliente
+                    (id, código, nombre de cada canal)
+
+Estos datos NO los ingresa el usuario en cada consulta. Los provee el sistema
+al momento del login y se conservan en la sesión activa.
+
+================================================================================
+FIN DEL DOCUMENTO
+================================================================================

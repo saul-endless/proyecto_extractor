@@ -34,13 +34,12 @@ def limpiar_texto_para_api(texto):
 # CONFIGURACION DE RUTAS Y MODELO
 # -----------------------------------------------------------------------------
 
-# Configuracion interna oculta
-API_KEY_INTERNAL = ""
-MODEL_INTERNAL = 'gemini-3-flash-preview'
-MODEL_MATH_INTERNAL = 'gemini-3-flash-preview' 
+from gemini_keys import (
+    CHATBOT_API_KEY_INTERNAL    as API_KEY_INTERNAL,
+    CHATBOT_MODEL_INTERNAL      as MODEL_INTERNAL,
+    CHATBOT_MODEL_MATH_INTERNAL as MODEL_MATH_INTERNAL,
+)
 
-#MODEL_INTERNAL = 'gemini-2.5-flash'
-#MODEL_MATH_INTERNAL = 'gemini-2.5-pro' 
 # -------------------------------------------------------------------
 
 # Ruta del modelo local
@@ -257,12 +256,26 @@ def ejecutar_motor_matematico(json_data, query_usuario):
         - Si faltan datos: Escribe "FALTAN_DATOS: [Lista de variables necesarias]" y una pregunta sugerida para el usuario.
         """
         
+        t_inicio_mat = __import__("time").time()
         respuesta_pro = modelo_pro.generate_content(
             prompt_matematico,
-            generation_config={"temperature": 0.0} # Temperatura 0 para máxima precisión matemática
+            generation_config={"temperature": 0.0}
         )
-        
-        print("[SISTEMA] Cálculos matemáticos recibidos del modelo Pro.")
+        t_fin_mat = __import__("time").time()
+
+        print("[SISTEMA] Calculos matematicos recibidos del modelo Pro.")
+        try:
+            guardar_registro_costos_chatbot(
+                funcion="ejecutar_motor_matematico",
+                descripcion="Calculo de proyeccion financiera con modelo Pro",
+                modelo=MODEL_MATH_INTERNAL,
+                tiempo=t_fin_mat - t_inicio_mat,
+                tokens_in=respuesta_pro.usage_metadata.prompt_token_count,
+                tokens_out=respuesta_pro.usage_metadata.candidates_token_count
+            )
+        except Exception:
+            pass
+
         return respuesta_pro.text
 
     except Exception as e:
@@ -302,6 +315,19 @@ def construir_prompt_sistema():
     # Se utiliza r""" para que Python no interprete los caracteres de escape de LaTeX
     return r"""
     Eres el "CFO Estratégico". Tu objetivo es explicar la salud financiera de la empresa de forma pedagógica, clara y directa para el dueño del negocio.
+
+    IDENTIDAD MILO FINANCE (CARACTERÍSTICAS PERMITIDAS):
+    Eres "Milo", la inteligencia artificial de planeación financiera diseñada para LATAM.
+    Tu eslogan es: "Finanzas claras. Decisiones seguras."
+    Si te preguntan qué puedes hacer o sobre tus funcionalidades, debes basarte ÚNICAMENTE en lo siguiente:
+    - Procesas archivos contables reales (Excel, XML, CSV).
+    - Generas proyecciones automáticas.
+    - Detectas desviaciones y lanzas alertas financieras.
+    - Calculas KPIs como CAC, LTV, MRR, margen y liquidez.
+    - Explicas en lenguaje claro lo que significan los números.
+    - Permites colaboración con asesores o socios.
+    - Tu modelo de negocio incluye opciones Free, Pro y White-label B2B.
+    JAMÁS inventes funcionalidades ajenas a esta lista.
 
     INSTRUCCIONES DE TONO Y LENGUAJE:
     1. LENGUAJE EXTREMADAMENTE SENCILLO Y COMÚN: Tu prioridad absoluta es la claridad total. Está PROHIBIDO usar palabras complejas, términos rebuscados o vocabulario técnico poco frecuente. Debes usar estrictamente palabras comunes que cualquiera entienda a la primera. Si existe una palabra simple (ej. "gasto", "deuda", "dinero"), ÚSALA en lugar de una técnica (ej. "erogación", "pasivo", "capital"). Explica conceptos usando analogías cotidianas (como el flujo de agua, la administración de una casa o el combustible de un coche). No expliques tu método de enseñanza, solo aplícalo.
@@ -345,24 +371,19 @@ def construir_prompt_sistema():
 
     REGLAS DE FILTRADO Y MEMORIA:
     1. PRIORIDAD DE MEMORIA: Tus consejos previos, aclaraciones dadas y datos mencionados anteriormente en este chat son VERDADES ABSOLUTAS. Debes consultarlos antes que los archivos JSON si la pregunta refiere al pasado de la charla.
-    2. ÁMBITO: Solo respondes sobre datos financieros (JSON), conceptos de negocio aplicados o el historial del chat.
+    2. ÁMBITO: Solo respondes sobre datos financieros (JSON), características de Milo Finance, conceptos de negocio aplicados o el historial del chat.
     3. RECHAZO: Para temas ajenos, responde estrictamente:
         <p>Lo siento, como tu CFO personal, mi labor es ayudarte a entender tu dinero. No puedo ayudarte con temas ajenos a las finanzas.</p>
 
     REGLAS DE IDENTIDAD Y CONTEXTO (_DATOS):
-    Para cada respuesta, consulta obligatoriamente el objeto `_DATOS` para establecer quién es el usuario y el contexto global de la cuenta. Esta información es la "Verdad Base" de la empresa:
+    Para cada respuesta, busca obligatoriamente en el archivo JSON provisto (específicamente en la información general) los siguientes puntos para establecer tu contexto. Esta información es la "Verdad Base" de la empresa actual:
     1. **IDENTIDAD CORPORATIVA (YO/NOSOTROS):**
-        - Nombre de la empresa: "ENDLESS INNOVATION TECHNOLOGIES SA DE CV"
-        - Cuenta analizada: "0119100679"
-    2. **DISCRIMINACIÓN DE ORIGEN/DESTINO:** Usa la identidad anterior para interpretar las transacciones sin errores:
-        - Si un ingreso viene de un nombre distinto a "ENDLESS INNOVATION TECHNOLOGIES SA DE CV", clasifícalo como CLIENTE o TERCERO.
-        - Si un movimiento dice "ENDLESS INNOVATION TECHNOLOGIES SA DE CV", considéralo un movimiento interno o propio de la empresa.
-    3. **CONTEXTO DE SALUD FINANCIERA (REFERENCIA):** Ten siempre presentes los indicadores generales del archivo `_DATOS` para matizar tus respuestas:
-        - Periodo del estado de cuenta: "01/04/2025 al 30/04/2025"
-        - Saldo inicial: $5,454.1
-        - Saldo final: $85,796.61
-        - Saldo promedio: $260,434.73
-        - Actividad: 34 depósitos vs 59 retiros.
+        - Identifica el nombre de la empresa titular del estado de cuenta y el número de cuenta.
+    2. **DISCRIMINACIÓN DE ORIGEN/DESTINO:** Usa el nombre de la empresa titular que detectaste para interpretar las transacciones sin errores:
+        - Si un movimiento de origen/destino tiene un nombre distinto a la empresa titular, clasifícalo como CLIENTE o TERCERO.
+        - Si un movimiento coincide exactamente con el nombre de la empresa titular, considéralo un movimiento interno o propio de la empresa.
+    3. **CONTEXTO DE SALUD FINANCIERA (REFERENCIA):** Extrae y ten siempre presentes los indicadores generales del archivo de datos para matizar tus respuestas:
+        - Revisa dinámicamente cuál es el periodo exacto del estado de cuenta, el saldo inicial, saldo final, saldo promedio y la cantidad de retiros/depósitos. NO asumas datos de otros meses ni empresas, usa exclusivamente lo que viene en el JSON actual. Si el JSON indica "No hay datos financieros disponibles actualmente.", omite la revisión de datos transaccionales y apóyate exclusivamente en responder consultas usando las capacidades y características de Milo Finance.
 
     REGLAS DE ANÁLISIS:
     - Clasifica por "Giro de la transacción" (9 categorías fijas).
@@ -378,9 +399,18 @@ def construir_prompt_sistema():
     - **DIRECCIÓN DE LA RESPUESTA:** Si el usuario hace una pregunta muy general, dirige la respuesta hacia lo particular.
     - **CONTEXTO PORCENTUAL:** Es importante que expreses la relevancia de los datos en porcentaje (%). Por ejemplo: "en gastos de noviembre el % de nómina fue del 40%, siendo tu gasto más fuerte".
     - **SUGERENCIAS PROACTIVAS DE PERIODOS:** Cuando el usuario pregunte algo sobre un mes en específico, sugiere realizar un comparativo con meses anteriores.
+
+    REGLAS DE IDIOMA Y VALIDACIÓN:
+    1. ERES TRILINGÜE, PERO RESTRINGIDO: Solo tienes permitido interactuar en 3 idiomas: Español, Portugués de Brasil e Inglés. Debes rechazar de forma amable cualquier intento de interactuar en otro idioma.
+    2. MISMA IDENTIDAD, OTRO IDIOMA: Cuando la conversación sea en Portugués o Inglés, debes comportarte EXACTAMENTE de la misma manera: misma personalidad de CFO, mismo lenguaje ultra-sencillo y sin jerarquías, y aplicando estrictamente las mismas reglas de formato (HTML para texto y listas, y LaTeX puro `$$ \begin{array}... $$` para tablas). No simplifiques, ni elimines, ni modifiques tu manera de actuar, solo cambia el idioma.
+    3. MANEJO DE VARIABLES EN EL JSON: Los campos del JSON provienen de tu sistema backend y siempre llegarán nombrados en español (ej. "Nombre de la transaccion", "Detalle de la operación", "Idioma del Estado de Cuenta"), pero su CONTENIDO interno puede estar en portugués. Debes analizar e interpretar su contenido en su idioma original sin confundirte.
+    4. PROTOCOLO DE CONFLICTO DE IDIOMA CONTINUO (MISMATCH): Para CADA consulta, debes verificar el contexto actual:
+       - CASO A (CON ESTADO DE CUENTA): Si existe el campo "Idioma del Estado de Cuenta" en el JSON, compáralo con el idioma del prompt actual del usuario. Si hay conflicto (ej. JSON en Portugués pero usuario habla Español o Inglés, o JSON en Español pero usuario habla Portugués o Inglés) -> ALTO. Antes de responder la duda, tu ÚNICA respuesta debe ser preguntarle al usuario de forma clara en AMBOS IDIOMAS (el del JSON y el del prompt actual) en qué idioma desea que se lleve a cabo la conversación. SIN CANDADOS DE MEMORIA: Esta validación está siempre activa y volverá a preguntar si el usuario alterna repentinamente de idioma a la mitad del chat.
+       - CASO B (SIN ESTADO DE CUENTA): Si el contexto indica "No hay datos financieros disponibles actualmente.", NO hay estado de cuenta para causar conflicto. En este caso, el idioma se rige 100% por el idioma en que el usuario escriba su prompt. Identifica si te habla en Español, Portugués o Inglés, y adáptate automáticamente a ese idioma para responderle. Si te habla en un cuarto idioma no permitido, recházalo cordialmente.
+       - Una vez confirmado o identificado el idioma permitido, generarás todas tus respuestas y análisis aplicando tu rol completo en el idioma correspondiente.
     """
 
-def generar_respuesta_chat(modelo, contexto_datos, historial_contexto, pregunta_usuario):
+def generar_respuesta_chat(modelo, contexto_datos, historial_contexto, pregunta_usuario, cliente_id=0, usuario_id=0):
     mensaje_sistema = construir_prompt_sistema()
 
     # Reconstrucción de la memoria con limpieza de texto para evitar errores de codificación
@@ -458,6 +488,7 @@ def generar_respuesta_chat(modelo, contexto_datos, historial_contexto, pregunta_
 
         # Ejecucion de inferencia
         # Bajamos temperatura a 0.1 para asegurar precisión en la estructura de LaTeX
+        t_inicio_chat = __import__("time").time()
         respuesta = modelo.generate_content(
             prompt_final,
             generation_config={
@@ -465,13 +496,25 @@ def generar_respuesta_chat(modelo, contexto_datos, historial_contexto, pregunta_
                 "max_output_tokens": 64000
             }
         )
+        t_fin_chat = __import__("time").time()
         
-        # En cuanto llega la respuesta de Gemini, matamos el proceso de la GPU
         stop_gpu_simulation.set()
-        gpu_thread.join(timeout=1.0) # Esperamos limpieza rapida
-        # ------------------------------
+        gpu_thread.join(timeout=1.0)
 
-        # Limpiamos la respuesta del modelo antes de guardarla o mostrarla
+        try:
+            guardar_registro_costos_chatbot(
+                funcion="generar_respuesta_chat",
+                descripcion="Respuesta de chat CFO al usuario",
+                modelo=MODEL_INTERNAL,
+                tiempo=t_fin_chat - t_inicio_chat,
+                tokens_in=respuesta.usage_metadata.prompt_token_count,
+                tokens_out=respuesta.usage_metadata.candidates_token_count,
+                cliente_id=cliente_id,
+                usuario_id=usuario_id
+            )
+        except Exception:
+            pass
+
         return limpiar_texto_para_api(respuesta.text)
         
     except Exception as e:
@@ -480,6 +523,113 @@ def generar_respuesta_chat(modelo, contexto_datos, historial_contexto, pregunta_
         if "exceed context window" in err_msg:
             return r"$$\text{ERROR DE DISPONIBILIDAD: El volumen de datos excede la ventana de contexto.}$$"
         return limpiar_texto_para_api(f"$$\\text{{Error técnico: {e}}}$$")
+
+# -----------------------------------------------------------------------------
+# FUNCIONES DE FASE 3.5 (SUGERENCIAS INICIALES)
+# -----------------------------------------------------------------------------
+
+def generar_bienvenida_cfo(modelo, contexto_datos, cliente_id=0, usuario_id=0):
+    # Inyectamos el MISMO prompt de comportamiento de la Fase 4
+    mensaje_sistema = construir_prompt_sistema()
+    
+    prompt_bienvenida = f"""
+    {mensaje_sistema}
+
+    --- INSTRUCCIÓN ESPECÍFICA PARA ESTA INTERACCIÓN (FASE 3.5) ---
+    Tu única tarea en este momento es dar la bienvenida y sugerir de 3 a 5 preguntas clave que el usuario te puede hacer basándote EN LOS DATOS EXACTOS que estás viendo en el JSON de respaldo.
+
+    REGLAS ESTRICTAS PARA ESTE SALUDO:
+    1. Tu respuesta DEBE empezar exactamente con esta frase: "Hola, soy tu CFO Milo Finance, y me puedes hacer preguntas como:"
+    2. Después, genera una lista en formato HTML (usando <ul> y <li>) con 3 a 5 preguntas concretas, directas y muy fáciles de entender sobre su estado financiero actual.
+    3. NO intentes responder a esas preguntas ahora, solo sugiérelas.
+    4. CERO explicaciones adicionales, CERO análisis aquí, y CERO código LaTeX. Solo la frase inicial y la lista HTML de preguntas.
+    5. EXCEPCIÓN DE IDIOMA: Como esta es la fase inicial y el usuario aún no ha escrito nada, IGNORA temporalmente la regla de "Protocolo de Conflicto de Idioma". Redacta este saludo directamente en el idioma que indique el campo "Idioma del Estado de Cuenta" del JSON (Español, Inglés o Portugués).
+    
+    --- DATA SET FINANCIERO DE RESPALDO (JSON) ---
+    {contexto_datos}
+    """
+    try:
+        prompt_final = limpiar_texto_para_api(prompt_bienvenida)
+        t_inicio_bv = __import__("time").time()
+        respuesta = modelo.generate_content(
+            prompt_final,
+            generation_config={
+                "temperature": 0.1,
+                "max_output_tokens": 64000
+            }
+        )
+        t_fin_bv = __import__("time").time()
+        try:
+            guardar_registro_costos_chatbot(
+                funcion="generar_bienvenida_cfo",
+                descripcion="Generacion de bienvenida y sugerencias fase 3.5",
+                modelo=MODEL_INTERNAL,
+                tiempo=t_fin_bv - t_inicio_bv,
+                tokens_in=respuesta.usage_metadata.prompt_token_count,
+                tokens_out=respuesta.usage_metadata.candidates_token_count,
+                cliente_id=cliente_id,
+                usuario_id=usuario_id
+            )
+        except Exception:
+            pass
+        return limpiar_texto_para_api(respuesta.text)
+    except Exception as e:
+        return limpiar_texto_para_api(f"<p>Error tecnico generando sugerencias: {e}</p>")
+
+# -----------------------------------------------------------------------------
+# FUNCIONES DE FASE 3.7 (ANÁLISIS COMPARATIVO PROFUNDO)
+# -----------------------------------------------------------------------------
+
+def generar_analisis_fase_3_7(modelo, contexto_datos, cliente_id=0, usuario_id=0):
+    mensaje_sistema = construir_prompt_sistema()
+    
+    prompt_fase_3_7 = f"""
+    {mensaje_sistema}
+
+    --- INSTRUCCIÓN ESPECÍFICA PARA ESTA INTERACCIÓN (FASE 3.7) ---
+    Tu tarea es realizar un análisis comparativo y exhaustivo. En los datos provistos tienes un historial de meses anteriores y un mes nuevo recién agregado (el más reciente cronológicamente). 
+    
+    REGLAS ESTRICTAS PARA ESTE ANÁLISIS:
+    1. IDENTIFICACIÓN TEMPORAL: Detecta automáticamente cuál es el mes más reciente en los datos y cuáles son los meses históricos. Dale la mayor importancia y peso al mes más nuevo.
+    2. COMPARATIVA DETALLADA: Compara el mes más nuevo contra la base histórica. Debes desglosar de manera muy detallada:
+       - Qué estadísticas y datos han mejorado y en qué porcentaje.
+       - Qué ha empeorado (gastos, fugas, etc.) y en qué porcentaje exacto.
+       - Qué métricas se han mantenido iguales o estables.
+    3. PATRONES Y ALERTAS: Identifica si históricamente existe un patrón (ej. un gasto va subiendo mes con mes) y señala explícitamente las "Alertas" o "Cosas que van mal".
+    4. PREGUNTAS PUENTE: Al finalizar tu reporte, sugiere explícitamente 3 a 5 preguntas avanzadas que el usuario podría hacerte en el chat a continuación (para conocer cómo mejorar lo que va mal, pedir detalles sobre los cambios, etc.). 
+    5. INDEPENDENCIA: Este es un reporte de inicio. NO simules una conversación ni empieces el chat, solo entrega el reporte formateado en HTML (texto) y LaTeX (para tablas y números).
+    6. EXCEPCIÓN DE IDIOMA: Como esta es la fase inicial automática, IGNORA temporalmente la regla de "Protocolo de Conflicto de Idioma". Redacta todo este reporte de análisis estrictamente en el idioma que indique el campo "Idioma del Estado de Cuenta" del JSON (Español, Inglés o Portugués).
+    
+    --- DATA SET FINANCIERO DE RESPALDO (JSON) ---
+    {contexto_datos}
+    """
+    try:
+        prompt_final = limpiar_texto_para_api(prompt_fase_3_7)
+        t_inicio_37 = __import__("time").time()
+        respuesta = modelo.generate_content(
+            prompt_final,
+            generation_config={
+                "temperature": 0.1,
+                "max_output_tokens": 64000
+            }
+        )
+        t_fin_37 = __import__("time").time()
+        try:
+            guardar_registro_costos_chatbot(
+                funcion="generar_analisis_fase_3_7",
+                descripcion="Analisis comparativo historico fase 3.7",
+                modelo=MODEL_INTERNAL,
+                tiempo=t_fin_37 - t_inicio_37,
+                tokens_in=respuesta.usage_metadata.prompt_token_count,
+                tokens_out=respuesta.usage_metadata.candidates_token_count,
+                cliente_id=cliente_id,
+                usuario_id=usuario_id
+            )
+        except Exception:
+            pass
+        return limpiar_texto_para_api(respuesta.text)
+    except Exception as e:
+        return limpiar_texto_para_api(f"<p>Error tecnico generando analisis Fase 3.7: {e}</p>")
 
 # -----------------------------------------------------------------------------
 # BLOQUE PRINCIPAL
@@ -496,7 +646,21 @@ def ejecucion_principal():
     modelo = iniciar_modelo(ruta_modelo_llm)
     if not modelo: return
 
-    # Historial para mantener el contexto del chat
+    # Generamos saludo inicial dinámico Fase 3.5
+    print("\nGenerando bienvenida dinámica basada en tus datos (Fase 3.5)...\n")
+    saludo_inicial = generar_bienvenida_cfo(modelo, datos_financieros)
+    print("-" * 50)
+    print(f"ASESOR (Fase 3.5):\n{saludo_inicial}")
+    print("-" * 50)
+
+    # Generamos el análisis comparativo profundo Fase 3.7
+    print("\nAnalizando históricos y generando comparativa profunda del último mes (Fase 3.7)...\n")
+    analisis_3_7 = generar_analisis_fase_3_7(modelo, datos_financieros)
+    print("-" * 50)
+    print(f"REPORTE COMPARATIVO (Fase 3.7):\n{analisis_3_7}")
+    print("-" * 50)
+
+    # Historial para mantener el contexto del chat (Fase 4 - Completamente limpio y separado)
     historial_chat = []
 
     print("\n" + "-"*50)
@@ -524,6 +688,72 @@ def ejecucion_principal():
 
         except KeyboardInterrupt:
             break
+
+# -----------------------------------------------------------------------------
+# REGISTRO DE COSTOS CHATBOT CFO
+# -----------------------------------------------------------------------------
+
+import csv as _csv_cfo
+from datetime import datetime as _dt_cfo
+from pathlib import Path as _Path_cfo
+
+RUTA_CSV_CHATBOT = _Path_cfo("/home/endless/FUNCIONALIDADES/PROYECTO EXTRACTOR") / "registro_costos_chatbot.csv"
+
+_CABECERA_CSV_CHATBOT = [
+    "Fecha_Hora",
+    "Cliente_ID",
+    "Usuario_ID",
+    "Funcion",
+    "Descripcion",
+    "Modelo",
+    "Tiempo_Respuesta",
+    "Input_Tokens",
+    "Output_Tokens",
+    "Costo_Input",
+    "Costo_Output",
+    "Costo_Total_Operacion"
+]
+
+def guardar_registro_costos_chatbot(
+    funcion: str,
+    descripcion: str,
+    modelo: str,
+    tiempo: float,
+    tokens_in: int,
+    tokens_out: int,
+    cliente_id: int = 0,
+    usuario_id: int = 0
+):
+    # Registra en CSV el consumo de tokens y costo de cada llamada a Gemini del chatbot CFO
+    existe = RUTA_CSV_CHATBOT.exists()
+    fecha_hora = _dt_cfo.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    costo_in = (tokens_in / 1_000_000) * 0.50
+    costo_out = (tokens_out / 1_000_000) * 3.00
+    costo_total = costo_in + costo_out
+
+    try:
+        with open(RUTA_CSV_CHATBOT, mode="a", newline="", encoding="utf-8") as f:
+            writer = _csv_cfo.writer(f)
+            if not existe:
+                writer.writerow(_CABECERA_CSV_CHATBOT)
+            writer.writerow([
+                fecha_hora,
+                cliente_id,
+                usuario_id,
+                funcion,
+                descripcion,
+                modelo,
+                f"{tiempo:.2f} s",
+                tokens_in,
+                tokens_out,
+                f"${costo_in:.6f}",
+                f"${costo_out:.6f}",
+                f"${costo_total:.6f}"
+            ])
+        print(f"[CHATBOT] Costo registrado | {funcion} | Cliente {cliente_id} | Usuario {usuario_id} | ${costo_total:.6f} USD")
+    except Exception as e:
+        print(f"[CHATBOT] Error guardando CSV de costos: {e}")
 
 if __name__ == "__main__":
     ejecucion_principal()

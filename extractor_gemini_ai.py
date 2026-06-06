@@ -14,6 +14,7 @@ from pathlib import Path
 from pypdf import PdfReader, PdfWriter
 from pdf2image import convert_from_path
 import concurrent.futures
+import uuid
 
 # Importaciones para el motor Qwen
 import torch
@@ -23,11 +24,12 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 # -----------------------------------------------------------------------------
 # CONFIGURACION
 # -----------------------------------------------------------------------------
-API_KEY = ""
-API_KEY_CALIBRACION = ""
-NOMBRE_MODELO = 'gemini-3-flash-preview' 
-#NOMBRE_MODELO = 'gemini-3.1-pro-preview' 
-#NOMBRE_MODELO = 'gemini-2.5-pro' 
+
+from gemini_keys import (
+    EXTRACTOR_API_KEY            as API_KEY,
+    EXTRACTOR_API_KEY_CALIBRACION as API_KEY_CALIBRACION,
+    EXTRACTOR_NOMBRE_MODELO      as NOMBRE_MODELO,
+)
 
 # Inicialización del cliente global
 client = genai.Client(api_key=API_KEY)
@@ -94,6 +96,21 @@ Salida Requerida (ÚNICAMENTE JSON):
 PROMPT_FASE_1 = """### ROL DEL SISTEMA
 Eres un auditor financiero experto. Extrae datos de estados de cuenta bancarios con precisión absoluta.
 
+### INSTRUCCIÓN CRÍTICA DE FORMATO E IDIOMA (¡LEER CON ATENCIÓN!)
+Actúa como un analista financiero experto bilingüe (Español y Portugués). Tu tarea es extraer y analizar los datos del documento financiero proporcionado y devolverlos ESTRICTAMENTE en formato JSON.
+
+REGLAS DE ORO BILINGÜES E INDISPENSABLES:
+1. ESTRUCTURA EN ESPAÑOL (MANDATORIO): Absolutamente todos los nombres de las variables, claves (keys), arrays y objetos del JSON DEBEN permanecer exactamente en ESPAÑOL, tal como se definen en el esquema proporcionado. NO traduzcas, no modifiques, ni cambies una sola letra de las claves.
+2. CONTENIDO EN EL IDIOMA ORIGINAL (ADAPTATIVO): El contenido de las variables (valores, textos, descripciones de transacciones) DEBE extraerse y mantenerse estrictamente en el IDIOMA ORIGINAL DEL DOCUMENTO. Si el estado de cuenta está en Español, extrae el texto en Español. Si está en Portugués de Brasil, extrae en Portugués. ¡NO TRADUZCAS EL CONTENIDO, respeta la naturaleza del PDF!
+3. EXCEPCIÓN - IDIOMA DEL DOCUMENTO EN ESPAÑOL: El valor para la variable "idioma_detectado" DEBE responderse SIEMPRE EN ESPAÑOL en mayúsculas y sin acentos (ejemplo: "ESPAÑOL", "PORTUGUES"), sin importar el idioma del PDF original.
+4. EXCEPCIÓN - CLASIFICACIÓN EN ESPAÑOL: El valor de la variable "Clasificacion" DEBE responderse SIEMPRE EN ESPAÑOL estricto ("Ingreso" o "Egreso"). ¡PROHIBIDO usar "Ingresso" o "Egresso"!
+
+Ejemplo estricto de lo que se espera:
+INCORRECTO (Clave traducida): {"nome_da_empresa": "Fábrica de Sapatos Ltda"}
+INCORRECTO (Cruzar idiomas): El PDF está en español pero los valores se tradujeron al portugués.
+CORRECTO (Claves en ES, Valores en IDIOMA ORIGINAL): {"nombre_empresa_detectado": "Fábrica de Sapatos Ltda"} (si el PDF está en portugués) o {"nombre_empresa_detectado": "Fábrica de Zapatos Ltda"} (si el PDF está en español).
+CORRECTO (Idioma del PDF siempre en ES): {"idioma_detectado": "PORTUGUES"}
+
 ### INSTRUCCIONES CRÍTICAS
 
 Utiliza tus capacidades de visión para trazar una línea vertical imaginaria desde los encabezados 'CARGOS' y 'ABONOS'.
@@ -111,9 +128,14 @@ descripción dice 'ABONO' o 'TRANSFERENCIA'.
    - **"Banco":** Identifica el banco que emite el estado de cuenta (ej. BBVA, Banamex, Santander, HSBC, etc.).
    
    - **"Nombre de la empresa" (Titular):** Este dato extráelo "TAL CUAL" (literal).
-   
-   - **"Numero de Cuenta":** Busca el número de cuenta o CLABE completo.
-   
+
+    - **"Numero de Cuenta":** Busca el número de cuenta o CLABE. EXTRAE SOLO LOS NÚMEROS (incluyendo guiones si los hay). Omite palabras como "Conta", "Agência", "C/C" o "Cuenta". Ejemplo: Si el PDF dice "Agência 0001 Conta 774588258-6", debes devolver estrictamente "0001774588258-6" o "774588258-6".
+
+    - **"Idioma":** Identifica el idioma principal de las DESCRIPCIONES DE LAS TRANSACCIONES (ignora si los textos legales, membretes o el logo están en otro idioma).
+     - **REGLA ESTRICTA (CATÁLOGO CERRADO):** Debes evaluar el texto y devolver EXACTAMENTE una de estas tres palabras, en mayúsculas y sin acentos: "ESPAÑOL", "PORTUGUES" o "INGLES".
+     - Si el texto está en portugués de Brasil, devuelve estrictamente "PORTUGUES".
+     - **FALLBACK (PARACAÍDAS):** Si el documento mezcla idiomas, no estás seguro, o es un idioma distinto a los tres mencionados, tu respuesta por defecto DEBE ser "ESPAÑOL". ¡No inventes otros idiomas!
+
    - **"Periodo" (REGLA DE NORMALIZACIÓN ESTRICTA):**
      - **NO** extraigas el periodo "tal cual". Tu trabajo aquí es **TRADUCIR** a números.
      - Si el PDF dice "Abr.", "Abril", "Apr" -> TÚ ESCRIBES "04".
@@ -164,22 +186,22 @@ descripción dice 'ABONO' o 'TRANSFERENCIA'.
        b) Si el saldo AUMENTA después de esta transacción → "Ingreso"
      
      - **REGLA DE ORO:** NO uses palabras como "PAGO", "RECIBIDO", "TRANSFERENCIA", "DEPOSITO" para clasificar
-        USA ÚNICAMENTE la posición espacial del número en la página
-        
+       USA ÚNICAMENTE la posición espacial del número en la página
+       
      - **EJEMPLO VISUAL:**
-        Fecha | Descripción               | CARGOS  | ABONOS
-        15/09 | PAGO CUENTA TERCERO       | 5,394.00|
-        15/09 | DEPOSITO RECIBIDO         |         | 28,420.00
+       Fecha | Descripción                | CARGOS  | ABONOS
+       15/09 | PAGO CUENTA TERCERO        | 5,394.00|
+       15/09 | DEPOSITO RECIBIDO          |         | 28,420.00
 
-        - Primera línea: Número en columna CARGOS → Clasificacion: "Egreso"
-        - Segunda línea: Número en columna ABONOS → Clasificacion: "Ingreso"
-        
+         - Primera línea: Número en columna CARGOS → Clasificacion: "Egreso"
+         - Segunda línea: Número en columna ABONOS → Clasificacion: "Ingreso"
+         
      - **CASOS ESPECIALES:**
-                - Si el PDF tiene el monto en UNA SOLA COLUMNA con signo (+/-):
-                  * Monto con "-" o sin signo → "Egreso"
-                  * Monto con "+" → "Ingreso"
-                - **MONTOS CON SIGNO NEGATIVO AL FINAL (CRÍTICO):** Si el monto impreso en el PDF termina con un signo negativo (ej. "8,500.00-", "480.00-"), clasifícalo estrictamente según la columna en la que se ubica visualmente (generalmente es "Egreso" por estar en la columna de Retiros). PERO, al extraer el valor, **DEBES pasarlo como un número negativo (float negativo)** en tu JSON (ej. -8500.00). ¡NO lo conviertas a "Ingreso" asumiendo que es una devolución, y NO ignores el signo negativo!
-             
+                 - Si el PDF tiene el monto en UNA SOLA COLUMNA con signo (+/-):
+                   * Monto con "-" o sin signo → "Egreso"
+                   * Monto con "+" → "Ingreso"
+                 - **MONTOS CON SIGNO NEGATIVO AL FINAL (CRÍTICO):** Si el monto impreso en el PDF termina con un signo negativo (ej. "8,500.00-", "480.00-"), clasifícalo estrictamente según la columna en la que se ubica visualmente (generalmente es "Egreso" por estar en la columna de Retiros). PERO, al extraer el valor, **DEBES pasarlo como un número negativo (float negativo)** en tu JSON (ej. -8500.00). ¡NO lo conviertas a "Ingreso" asumiendo que es una devolución, y NO ignores el signo negativo!
+               
      - **MULTIPLICIDAD (MANDATO ABSOLUTO - PROHIBIDO AGRUPAR):** Si aparecen múltiples operaciones IDÉNTICAS (misma fecha, misma descripción exacta, mismo monto exacto) una tras otra, **TIENES QUE EXTRAER TODAS Y CADA UNA POR SEPARADO**.
         * **ESTÁ ESTRICTAMENTE PROHIBIDO** agrupar, simplificar, consolidar o unificar transacciones repetidas. La IA NO debe intentar ser "inteligente" ahorrando espacio; debe ser un "espejo" exacto del PDF.
         * **EJEMPLO CRÍTICO:** Si el estado de cuenta muestra 5 filas consecutivas de "$10,000.00" con la descripción "PAGO PRESTAMO" el mismo día, tu salida JSON **DEBE** contener 5 objetos independientes.
@@ -188,8 +210,8 @@ descripción dice 'ABONO' o 'TRANSFERENCIA'.
      - **CONTINUIDAD DE PÁGINA (ANTI-PÉRDIDA DE DATOS):** - Presta atención extrema al **final de cada página** y al **inicio de la siguiente**. Es el lugar más común donde se pierden filas.
        - Si una página termina con una transacción y la siguiente empieza con otra (incluso si son idénticas en fecha y monto), **AMBAS EXISTEN**. No asumas que es un error de impresión o un duplicado visual.
        - Ignora encabezados intermedios repetidos (como "SALDO ANTERIOR" al inicio de página) pero **CAPTURA la primera transacción real** de la nueva página.
-             
-     - **Monto de la transaccion:** Extrae solo el número (float). Si el número impreso en el PDF tiene un signo negativo al final (ej. "8,500.00-"), asegúrate de que el valor float final incluya el signo negativo (ej. -8500.00).
+               
+     - **Monto de la transaccion:** Extrae solo el número en formato float puro. REGLA CRÍTICA DE DECIMALES (BRASIL vs JSON): Los estados de cuenta en Brasil usan coma para decimales y punto para miles (ej. "R$ 1.500,50"). Al pasarlo al JSON, DEBES convertirlo estrictamente al formato numérico de programación, usando PUNTO para decimales y SIN separadores de miles (ej. 1500.50). Si el número impreso tiene un signo negativo al final (ej. "8.500,00-"), el float debe ser negativo (ej. -8500.00).
 
 5. **VERIFICACION ESTRUCTURAL DE COLUMNAS (OBLIGATORIO ANTES DE EXTRAER):**
    - Antes de extraer cualquier transacción, responde mentalmente estas preguntas:
@@ -236,6 +258,7 @@ Devuelve solo este objeto JSON raw. No cambies las claves:
       "banco_detectado": "Texto...",
       "nombre_empresa_detectado": "Texto...",
       "numero_cuenta_detectado": "Texto...",
+      "idioma_detectado": "Texto...",
       "periodo_detectado": "Texto...",
       "saldo_inicial_extracto": 0.00,
       "saldo_final_extracto": 0.00,
@@ -321,7 +344,7 @@ class MotorQwen:
                 torch_dtype=torch.float16,
                 trust_remote_code=True
             )
-            print("[QWEN] Modelo cargado en GPU.", flush=True)
+            print(f"[QWEN] Modelo cargado exitosamente en: {self.model.device}", flush=True)
         except Exception as e:
             print(f"[QWEN] Error crítico cargando modelo: {e}", flush=True)
             raise e
@@ -340,25 +363,26 @@ class MotorQwen:
     def limpiar_json_sucio(self, texto_raw):
         """Intenta reparar JSONs con saltos de línea internos o comillas mal cerradas."""
         try:
-            # 1. Encontrar el bloque de lista []
-            match = re.search(r'\[.*\]', texto_raw, re.DOTALL)
-            if not match: return []
-            content = match.group(0)
-            
-            # 2. Eliminar saltos de línea REALES dentro del string json para evitar "Invalid control char"
-            # Reemplazamos \n por espacio, excepto si parece ser parte de la estructura (esto es heurístico)
-            content_lineal = content.replace("\n", " ").replace("\r", "")
-            
-            # 3. Intentar carga estándar
-            return json.loads(content_lineal)
-        except:
-            # 4. Fallback: Intentar con strict=False (permite algunos caracteres de control)
-            try:
+            # 1. Intentar encontrar el bloque de lista [] primero
+            match_array = re.search(r'\[.*\]', texto_raw, re.DOTALL)
+            if match_array:
+                content = match_array.group(0)
+                # Eliminamos el replace de saltos de línea para no romper JSON válidos
                 return json.loads(content, strict=False)
-            except:
-                return []
+            
+            # 2. Si Qwen respondió sin corchetes (común al enviar solo 1 elemento), buscamos el objeto {}
+            match_dict = re.search(r'\{.*\}', texto_raw, re.DOTALL)
+            if match_dict:
+                content = match_dict.group(0)
+                resultado_unico = json.loads(content, strict=False)
+                # CRÍTICO: Envolvemos el diccionario en una lista para evitar el Mismatch (1 vs 0)
+                return [resultado_unico] 
+                
+            return []
+        except:
+            return []
 
-    def procesar_lote_enriquecimiento(self, lote_transacciones, titular_cuenta, numero_cuenta_propia):
+    def procesar_lote_enriquecimiento(self, lote_transacciones, titular_cuenta, numero_cuenta_propia, idioma_detectado="ESPAÑOL"):
         if self.model is None:
             self.cargar_recursos()
 
@@ -373,9 +397,76 @@ class MotorQwen:
             })
 
         json_input = json.dumps(input_optimizado, ensure_ascii=False, indent=2)
+        num_items = len(lote_transacciones)
         
-        # Configuración del prompt para extracción de cuentas y tipos
-        prompt_sistema = f"""Eres un experto extractor de datos bancarios.
+        # ---------------------------------------------------------------------
+        # SELECCIÓN DINÁMICA Y BLINDAJE DE IDIOMA PARA QWEN
+        # ---------------------------------------------------------------------
+        import unicodedata
+        
+        # Limpieza robusta de acentos y espacios para asegurar que no falle el condicional
+        idioma_raw = str(idioma_detectado).strip().upper() if idioma_detectado else "ESPAÑOL"
+        idioma_limpio = ''.join(c for c in unicodedata.normalize('NFD', idioma_raw) if unicodedata.category(c) != 'Mn')
+
+        if "PORTUGUE" in idioma_limpio or "BRASIL" in idioma_limpio:
+            idioma_salida = "PORTUGUES"
+        elif "INGLE" in idioma_limpio or "ENGLISH" in idioma_limpio:
+            idioma_salida = "INGLES"
+        else:
+            idioma_salida = "ESPAÑOL"
+
+        if idioma_salida == "PORTUGUES":
+            # PROMPT ADAPTADO PARA BRASIL (Com cadeado anti-tradução forte)
+            prompt_sistema = f"""Você é um especialista em extração de dados bancários brasileiros.
+SEU OBJETIVO: Analisar o texto das descrições bancárias e estruturar os dados.
+
+DADOS DO TITULAR (Dono do extrato bancário):
+- Titular: "{titular_cuenta}"
+- Conta Própria: "{numero_cuenta_propia}"
+
+INSTRUÇÕES DE EXTRAÇÃO (LEIA COM ATENÇÃO):
+
+1. **CONTAS E CHAVES (PRIORIDADE ALTA):**
+   - Busque AGRESSIVAMENTE dentro do "Texto_Completo" qualquer sequência de números que represente uma conta, agência, CNPJ (14 dígitos), CPF (11 dígitos) ou chaves PIX.
+   - Se encontrar uma Conta/Agência no texto que NÃO seja a "{numero_cuenta_propia}", essa é a CONTA DA CONTRAPARTE.
+   - Se for uma Transferência enviada (Egreso) -> A conta encontrada é o "Destino" (destino).
+   - Se for um Depósito recebido (Ingreso) -> A conta encontrada é a "Origen" (origem).
+   - Se NÃO houver números de conta no texto, deixe os campos vazios ("").
+
+2. **TIPO DE TRANSAÇÃO (NORMALIZADO EM ESPANHOL):**ápido 
+   - Use SOMENTE estes tipos (em espanhol para manter o sistema backend): "Transferencia", "Compra", "Depósito", "Pago", "Comisión", "Retiro Cajero", "Intereses", "Cheque".
+   - Se disser "PIX", "TED", "DOC" ou "Transferência", classifique como "Transferencia".
+   - Se disser "TARIFA", "MENSALIDADE", "TAXA" ou "IOF", classifique como "Comisión" (NÃO Egreso).
+   - Se for uma cobrança em maquininha de cartão (débito/crédito), classifique como "Compra".
+   - Se disser "Pagamento de boleto" ou "DARF", classifique como "Pago".
+
+3. **NOME RESUMIDO E CONTRAPARTE (CADEADO DE IDIOMA):**
+   - "Nombre resumido": REGRA ABSOLUTA E INQUEBRÁVEL: O valor desta chave DEVE ser escrito 100% em PORTUGUÊS DO BRASIL (PT-BR). É ESTRITAMENTE PROIBIDO traduzir o conteúdo para o espanhol, mesmo que as chaves do JSON estejam em espanhol. A descrição deve ser particular, limpa e concisa. Elimine datas e lixo corporativo. (Exemplos: "Pagamento de fatura para Uber", "Transferência recebida de João Silva", "Tarifa de manutenção de conta").
+   - "Quien realiza o recebe el pago": Extraia o nome da empresa ou pessoa (NÃO o titular). Mantenha no idioma original. Se for "TARIFA BANCARIA", o receptor é o Banco.
+
+4. **REFERÊNCIA:**
+   - Extraia APENAS a parte alfanumérica ou CNPJ/CPF principal (ex: "32.556.172/0001-32").
+   - Ignore palavras como "REF", "AUT", "ID" no valor final. Apenas o código.
+
+ESTRUTURA DE SAÍDA ESPERADA (As chaves DEVEM estar em Espanhol. DEVOLVA EXATAMENTE UM ARRAY DE {num_items} OBJETOS JSON):
+[
+  {{
+    "Nombre resumido": "...",
+    "Tipo de transacción": "...",
+    "Quien realiza o recebe el pago": "...",
+    "Numero de referencia o folio": "...",
+    "Numero de cuenta origen": "...",
+    "Numero de cuenta destino": "...",
+    "Metodo de pago": "Pix/Tarjeta/Boleto/Otro",
+    "Sucursal o ubicacion": "..."
+  }}
+]
+
+MUITO IMPORTANTE: RESPONDA APENAS COM O JSON ARRAY DE {num_items} ITENS. ZERO TEXTO ADICIONAL ANTES OU DEPOIS.
+"""
+        else:
+            # PROMPT ADAPTATIVO (MÉXICO/LATAM/EEUU/RESTO DEL MUNDO)
+            prompt_sistema = f"""Eres un experto extractor de datos bancarios.
 TU OBJETIVO: Analizar el texto de descripciones bancarias y estructurar los datos.
 
 DATOS PROPIOS (Del dueño del estado de cuenta):
@@ -391,21 +482,21 @@ INSTRUCCIONES DE EXTRACCIÓN (LEER ATENTAMENTE):
    - Si es un Depósito recibido -> La cuenta encontrada es la "Origen".
    - Si NO hay números en el texto, deja los campos de cuenta vacíos ("").
 
-2. **TIPO DE TRANSACCIÓN (NORMALIZADO):**
-   - Usa SOLO estos tipos: "Transferencia", "Compra", "Depósito", "Pago", "Comisión", "Retiro Cajero", "Intereses", "Cheque".
-   - Si dice "SPEI", es "Transferencia".
-   - Si dice "COMISION", "MANEJO DE CUENTA" o "IVA", es "Comisión" (NO Egreso).
+2. **TIPO DE TRANSACCIÓN (NORMALIZADO EN ESPAÑOL):**
+   - Usa SOLO estos tipos (las llaves y tipos siempre van en español): "Transferencia", "Compra", "Depósito", "Pago", "Comisión", "Retiro Cajero", "Intereses", "Cheque".
+   - Si dice "SPEI" o "Wire", es "Transferencia".
+   - Si dice "COMISION", "FEE", "MANEJO DE CUENTA" o "IVA", es "Comisión" (NO Egreso).
    - Si es un cargo en terminal punto de venta, es "Compra".
 
-3. **NOMBRE RESUMIDO Y CONTRAPARTE:**
-   - "Nombre resumido": Debe explicar qué pasó brevemente (ej: "Pago a Uber", "Transferencia a Juan"). NO incluyas fechas ni folios aquí.
-   - "Quien realiza o recibe el pago": Extrae el nombre de la empresa o persona (NO el dueño). Si es "COMISION...", el receptor es el Banco.
+3. **NOMBRE RESUMIDO Y CONTRAPARTE (ADAPTATIVO AL IDIOMA):**
+   - "Nombre resumido": REGLA ABSOLUTA SÍ O SÍ: El resultado DEBE mantenerse 100% en el idioma original del documento ({idioma_salida}). Debe ser una descripción particular y muy detallada sobre la entidad y el concepto, pero mucho más resumida, limpia y concisa que el texto original (evita que quede ambiguo). Elimina fechas, códigos, números de referencia y basura corporativa. Extrae la esencia exacta. (Ejemplos que debes imitar: "Pago de factura a Uber" si es español, "Uber ride payment" si es inglés). ¡ESTÁ ESTRICTAMENTE PROHIBIDO TRADUCIR EL CONTENIDO A OTRO IDIOMA QUE NO SEA {idioma_salida}!
+   - "Quien realiza o recibe el pago": Extrae el nombre de la empresa oa persona (NO el dueño). Si es "COMISION...", el receptor es el Banco.
 
 4. **REFERENCIA:**
    - Extrae SOLO la parte alfanumérica clave (ej: "0044752039").
-   - Ignora palabras como "REF", "FOLIO", "AUT", "RASTREO" en el valor final. Solo el código.
+   - Ignore palabras como "REF", "FOLIO", "AUT", "RASTREO", "ID" en el valor final. Solo el código.
 
-SALIDA ESPERADA (JSON Array puro):
+SALIDA ESPERADA (JSON Array puro, DEVUELVE EXACTAMENTE UN ARRAY DE {num_items} OBJETOS JSON. Las llaves (keys) siempre en ESPAÑOL):
 [
   {{
     "Nombre resumido": "...",
@@ -418,7 +509,11 @@ SALIDA ESPERADA (JSON Array puro):
     "Sucursal o ubicacion": "..."
   }}
 ]
+
+MUY IMPORTANTE: RESPONDE ÚNICAMENTE CON EL JSON ARRAY DE {num_items} ÍTEMS. CERO TEXTO ADICIONAL ANTES O DESPUÉS.
 """
+        # ---------------------------------------------------------------------
+
         messages = [
             {"role": "system", "content": prompt_sistema},
             {"role": "user", "content": f"Extrae los datos de este JSON:\n{json_input}"}
@@ -564,53 +659,66 @@ def calibrar_layout_fase_0(rutas_imagenes, client_obj):
     Fase inicial para detectar las coordenadas exactas de las columnas (SDK Nuevo).
     """
     print(f" [FASE 0] Detectando coordenadas adaptativas de columnas (Usando primer batch de imágenes)...", flush=True)
-    try:
-        archivos_subidos = []
-        # Subimos las imágenes del primer batch
-        for ruta in rutas_imagenes:
-            time.sleep(3.0) # Retardo de seguridad
-            
-            archivo = client_obj.files.upload(file=ruta, config={'mime_type': 'image/png'})
-            
-            intentos = 0
-            while archivo.state.name == "PROCESSING" and intentos < 30:
-                time.sleep(1)
-                archivo = client_obj.files.get(name=archivo.name)
-                intentos += 1
-            
-            if archivo.state.name == "FAILED":
-                print(f"Fallo subida imagen fase 0: {ruta.name}")
-                continue
-            archivos_subidos.append(archivo)
-            
-        if not archivos_subidos:
-            raise Exception("No se pudieron subir imágenes para calibración")
+    intentos_f0_max = 3
+    for intento_f0 in range(intentos_f0_max):
+        try:
+            if intento_f0 > 0:
+                espera = 10 * intento_f0
+                print(f" [FASE 0] Reintento {intento_f0 + 1}/{intentos_f0_max} (esperando {espera}s, resubiendo archivos)...", flush=True)
+                time.sleep(espera)
 
-        contenido = [PROMPT_FASE_0] + archivos_subidos
-        
-        t_inicio_f0 = time.time()
-        respuesta = client_obj.models.generate_content(
-            model=NOMBRE_MODELO,
-            contents=contenido,
-            config=types.GenerateContentConfig(
-                temperature=0.0,
-                max_output_tokens=65536,
-                tools=[types.Tool(code_execution=types.ToolCodeExecution())],
-                thinking_config=types.ThinkingConfig(thinking_level="high")
+            # Subida DENTRO del loop: en cada reintento se suben archivos frescos
+            archivos_subidos = []
+            for ruta in rutas_imagenes:
+                time.sleep(3.0)
+                archivo = client_obj.files.upload(file=ruta, config={'mime_type': 'image/png'})
+                intentos_upload = 0
+                while archivo.state.name == "PROCESSING" and intentos_upload < 30:
+                    time.sleep(1)
+                    archivo = client_obj.files.get(name=archivo.name)
+                    intentos_upload += 1
+                if archivo.state.name == "FAILED":
+                    print(f"Fallo subida imagen fase 0: {ruta.name}")
+                    continue
+                archivos_subidos.append(archivo)
+
+            if not archivos_subidos:
+                raise Exception("No se pudieron subir imágenes para calibración")
+
+            contenido = [PROMPT_FASE_0] + archivos_subidos
+
+            t_inicio_f0 = time.time()
+            respuesta = client_obj.models.generate_content(
+                model=NOMBRE_MODELO,
+                contents=contenido,
+                config=types.GenerateContentConfig(
+                    temperature=0.0,
+                    max_output_tokens=65536,
+                    tools=[types.Tool(code_execution=types.ToolCodeExecution())],
+                    thinking_config=types.ThinkingConfig(thinking_level="high")
+                )
             )
-        )
-        t_fin_f0 = time.time()
-        tiempo_f0 = t_fin_f0 - t_inicio_f0
-        
-        texto_limpio = limpiar_respuesta_json(respuesta.text)
-        datos_calibracion = json.loads(texto_limpio)
-        
-        calibracion = datos_calibracion.get("calibracion_layout")
-        if calibracion:
-            print(f" ✓ Calibración exitosa: Egresos ({calibracion['columna_egresos']['texto_detectado']} @ {calibracion['columna_egresos']['x_centro']}) | Ingresos ({calibracion['columna_ingresos']['texto_detectado']} @ {calibracion['columna_ingresos']['x_centro']}) [T: {tiempo_f0:.2f}s]", flush=True)
-            return calibracion, respuesta.usage_metadata.prompt_token_count, respuesta.usage_metadata.candidates_token_count, tiempo_f0
-    except Exception as e:
-        print(f" ✗ Error en Calibración Fase 0: {e}", flush=True)
+            t_fin_f0 = time.time()
+            tiempo_f0 = t_fin_f0 - t_inicio_f0
+
+            # Guardia contra respuesta vacía (server disconnect sin excepción)
+            if not respuesta.text:
+                raise Exception("Respuesta vacía del servidor (posible desconexión silenciosa)")
+
+            texto_limpio = limpiar_respuesta_json(respuesta.text)
+            datos_calibracion = json.loads(texto_limpio)
+
+            calibracion = datos_calibracion.get("calibracion_layout")
+            if calibracion:
+                print(f" ✓ Calibración exitosa: Egresos ({calibracion['columna_egresos']['texto_detectado']} @ {calibracion['columna_egresos']['x_centro']}) | Ingresos ({calibracion['columna_ingresos']['texto_detectado']} @ {calibracion['columna_ingresos']['x_centro']}) [T: {tiempo_f0:.2f}s]", flush=True)
+                return calibracion, respuesta.usage_metadata.prompt_token_count, respuesta.usage_metadata.candidates_token_count, tiempo_f0
+            break  # Respuesta válida pero sin calibracion_layout — no reintentar
+
+        except Exception as e:
+            print(f" ✗ Error Fase 0 intento {intento_f0 + 1}: {e}", flush=True)
+            if intento_f0 == intentos_f0_max - 1:
+                print(f" ✗ Fase 0 agotó todos los reintentos. Continuando sin calibración.", flush=True)
+
     return None, 0, 0, 0.0
 
 # -----------------------------------------------------------------------------
@@ -693,8 +801,8 @@ def procesar_fase_1(pdf_path, model, output_dir=None):
                     raise Exception(f"Falló procesamiento de imagen {ruta.name}")
                 return archivo
 
-            # Sube las imágenes del bloque al mismo tiempo (hasta 5 hilos)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            # Sube las imágenes del bloque al mismo tiempo (hasta 2 hilos)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
                 futuros = [executor.submit(subir_y_esperar, ruta_img) for ruta_img in rutas_imgs]
                 for futuro in concurrent.futures.as_completed(futuros):
                     archivos_subidos_obj.append(futuro.result())
@@ -1009,6 +1117,7 @@ def worker_qwen_consumidor(motor, listas_finales):
         datos_gen = contexto_compartido.get("datos_generales", {})
         titular = datos_gen.get("nombre_empresa_detectado", "TITULAR_GENERICO")
         mi_cuenta_real = str(datos_gen.get("numero_cuenta_detectado", "")).replace(" ", "")
+        idioma_pdf = datos_gen.get("idioma_detectado", "ESPAÑOL")
     
     # Limpieza del titular
     titular_simple = re.sub(r'\s+(SA DE CV|SC|SAPI|LTD|INC).*', '', titular, flags=re.IGNORECASE).strip()
@@ -1033,14 +1142,14 @@ def worker_qwen_consumidor(motor, listas_finales):
             except queue.Empty:
                 # Si la cola se vacía temporalmente, procesamos lo que haya en el buffer para no estancar la GPU
                 if buffer:
-                    procesar_buffer_qwen(motor, buffer, titular_simple, mi_cuenta_real, listas_finales, CAMPOS_VACIOS_FASE_3)
+                    procesar_buffer_qwen(motor, buffer, titular_simple, mi_cuenta_real, listas_finales, CAMPOS_VACIOS_FASE_3, idioma_pdf)
                     buffer = []
                 continue
                 
             if item is None: # Fin del proceso
                 if buffer:
                     # Procesar remanente
-                    procesar_buffer_qwen(motor, buffer, titular_simple, mi_cuenta_real, listas_finales, CAMPOS_VACIOS_FASE_3)
+                    procesar_buffer_qwen(motor, buffer, titular_simple, mi_cuenta_real, listas_finales, CAMPOS_VACIOS_FASE_3, idioma_pdf)
                 break
             
             # Actualización dinámica de cuenta propia
@@ -1054,7 +1163,7 @@ def worker_qwen_consumidor(motor, listas_finales):
             buffer.append(item)
             
             if len(buffer) >= 1:
-                procesar_buffer_qwen(motor, buffer, titular_simple, mi_cuenta_real, listas_finales, CAMPOS_VACIOS_FASE_3)
+                procesar_buffer_qwen(motor, buffer, titular_simple, mi_cuenta_real, listas_finales, CAMPOS_VACIOS_FASE_3, idioma_pdf)
                 buffer = []
                 
             cola_transacciones.task_done()
@@ -1064,9 +1173,9 @@ def worker_qwen_consumidor(motor, listas_finales):
         motor.liberar_recursos()
 
 
-def procesar_buffer_qwen(motor, buffer, titular_nombre, mi_cuenta_num, listas_finales, campos_vacios):
+def procesar_buffer_qwen(motor, buffer, titular_nombre, mi_cuenta_num, listas_finales, campos_vacios, idioma_pdf):
     # 1. Enriquecimiento con LLM
-    resultados_qwen = motor.procesar_lote_enriquecimiento(buffer, titular_nombre, mi_cuenta_num)
+    resultados_qwen = motor.procesar_lote_enriquecimiento(buffer, titular_nombre, mi_cuenta_num, idioma_pdf)
     
     usar_qwen = (len(resultados_qwen) == len(buffer))
     if not usar_qwen:
@@ -1087,16 +1196,22 @@ def procesar_buffer_qwen(motor, buffer, titular_nombre, mi_cuenta_num, listas_fi
         return t
 
     def limpiar_tipo(texto_qwen, texto_original, es_ingreso):
-        """Normaliza tipos"""
+        """Normaliza tipos (Soporte Bilingüe ES/PT-BR)"""
         t = str(texto_qwen).capitalize()
         orig = str(texto_original).upper()
         
+        # Reglas México
         if "SPEI" in orig or "TRASPASO" in orig: return "Transferencia"
+        # Reglas Brasil
+        if "PIX" in orig or "TED" in orig or "DOC" in orig: return "Transferencia"
+        if "BOLETO" in orig or "DARF" in orig or "DAS" in orig: return "Pago"
+        
+        # Generales
         if "CHEQUE" in orig: return "Cheque"
-        if "COMISION" in orig or "MANEJO DE CUENTA" in orig: return "Comisión"
-        if "IVA " in orig: return "Impuesto"
-        if "INTERES" in orig or "RENDIMIENTO" in orig: return "Interés"
-        if "RETIRO" in orig or "DISPOSICION" in orig: return "Retiro"
+        if "COMISION" in orig or "MANEJO DE CUENTA" in orig or "TARIFA" in orig or "TAXA" in orig or "MENSALIDADE" in orig: return "Comisión"
+        if "IVA " in orig or "IOF" in orig: return "Impuesto"
+        if "INTERES" in orig or "RENDIMIENTO" in orig or "RENDIMENTO" in orig: return "Interés"
+        if "RETIRO" in orig or "DISPOSICION" in orig or "SAQUE" in orig: return "Retiro"
         
         validos = ["Transferencia", "Depósito", "Cheque", "Comisión", "Impuesto", "Pago", "Retiro", "Tarjeta", "Interés"]
         if t in validos: return t
@@ -1141,7 +1256,14 @@ def procesar_buffer_qwen(motor, buffer, titular_nombre, mi_cuenta_num, listas_fi
         # Aplicación de reglas
         
         clasif_txt = str(tx_final.get("Clasificacion", "")).lower()
-        es_ingreso = "ingreso" in clasif_txt or "depósito" in clasif_txt or "abono" in clasif_txt
+        # Ampliamos la captura para soportar las variantes que devuelve el LLM en portugués
+        es_ingreso = (
+            "ingreso" in clasif_txt or 
+            "ingresso" in clasif_txt or 
+            "depósito" in clasif_txt or 
+            "deposito" in clasif_txt or 
+            "abono" in clasif_txt
+        )
         
         # 1. Tipo y Referencia
         tx_final["Tipo de transacción"] = limpiar_tipo(datos_qwen["Tipo de transacción"], tx_final["Nombre de la transaccion"], es_ingreso)
@@ -1513,11 +1635,13 @@ def guardar_resultados_finales(output_dir, ruta_pdf_input):
         "Nombre de la empresa del estado de cuenta": empresa,
         "Numero de cuenta del estado de cuenta": datos_gen.get("numero_cuenta_detectado", ""),
         "Periodo del estado de cuenta": periodo,
+        "Idioma del Estado de Cuenta": datos_gen.get("idioma_detectado", "No detectado"),
         "Saldo inicial de la cuenta": datos_gen.get("saldo_inicial_extracto", 0.0),
         "Saldo final de la cuenta": datos_gen.get("saldo_final_extracto", 0.0),
         "Saldo promedio del periodo": datos_gen.get("saldo_promedio_extracto", 0.0),
         "Cantidad total de depositos": len(lista_ingresos),
-        "Cantidad total de retiros": len(lista_egresos)
+        "Cantidad total de retiros": len(lista_egresos),
+        "Nombre banco": datos_gen.get("banco_detectado", "No detectado")
     }
     
     # Escritura (Igual que antes)
@@ -1549,6 +1673,11 @@ def main():
     print("-" * 60, flush=True)
     print("MODULO FASE 1 COMPLETA (GEMINI + QWEN LOCAL PARALELO)", flush=True)
     print("-" * 60, flush=True)
+
+    # Reinicializar clientes por si el script se reutiliza
+    global client, client_calibracion
+    client = genai.Client(api_key=API_KEY)
+    client_calibracion = genai.Client(api_key=API_KEY_CALIBRACION)
     
     if not DIR_INPUT.exists():
         print(f"Error: Crea la carpeta {DIR_INPUT}", flush=True)
@@ -1609,17 +1738,17 @@ def main():
         
         # Guardar
         guardar_resultados_finales(DIR_OUTPUT, archivo)
-        guardar_registro_costos(archivo.stem)
+        guardar_registro_costos(archivo.stem, cliente_id=0)
         
         time.sleep(2)
 
 # -----------------------------------------------------------------------------
 # FUNCIÓN DE GUARDADO DE REGISTRO DE COSTOS (CSV)
 # -----------------------------------------------------------------------------
-def guardar_registro_costos(pdf_name):
+def guardar_registro_costos(pdf_name, cliente_id=0):
     directorio_csv = Path("/home/endless/FUNCIONALIDADES/PROYECTO EXTRACTOR")
     directorio_csv.mkdir(parents=True, exist_ok=True)
-    archivo_csv = directorio_csv / "registro_costos.csv"
+    archivo_csv = directorio_csv / "registro_costos_extractor.csv"
     existe = archivo_csv.exists()
 
     with lock_resultados:
@@ -1642,7 +1771,7 @@ def guardar_registro_costos(pdf_name):
     tiempo_total = time.time() - inicio
     fecha_hora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Cálculos monetarios ($0.50 input / $3.00 output por millón)
+    # Calculos monetarios ($0.50 input / $3.00 output por millon)
     costo_in_0 = (t_in_0 / 1000000) * 0.50
     costo_out_0 = (t_out_0 / 1000000) * 3.00
     costo_in_1 = (t_in_1 / 1000000) * 0.50
@@ -1652,18 +1781,19 @@ def guardar_registro_costos(pdf_name):
     try:
         with open(archivo_csv, mode='a', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            # Escribir cabecera solo si el archivo es nuevo
             if not existe:
                 writer.writerow([
-                    "Fecha_Hora", "Banco", "Empresa", "Tiempo_Total_Procesamiento", 
-                    "Modelo_Coordenadas", "Tiempo_Respuesta_Coord", "Input_Tokens_Coord", "Output_Tokens_Coord", 
-                    "Costo_Input_Coord", "Costo_Output_Coord", 
-                    "Modelo_Transacciones", "Tiempo_Respuesta_Trans", "Input_Tokens_Trans", "Output_Tokens_Trans", 
+                    "Fecha_Hora", "Cliente_ID", "Banco", "Empresa",
+                    "Tiempo_Total_Procesamiento",
+                    "Modelo_Coordenadas", "Tiempo_Respuesta_Coord", "Input_Tokens_Coord", "Output_Tokens_Coord",
+                    "Costo_Input_Coord", "Costo_Output_Coord",
+                    "Modelo_Transacciones", "Tiempo_Respuesta_Trans", "Input_Tokens_Trans", "Output_Tokens_Trans",
                     "Costo_Input_Trans", "Costo_Output_Trans", "Costo_Total_Operacion"
                 ])
 
             writer.writerow([
                 fecha_hora,
+                cliente_id,
                 banco,
                 empresa,
                 f"{tiempo_total:.2f} s",
@@ -1681,25 +1811,36 @@ def guardar_registro_costos(pdf_name):
                 f"${costo_out_1:.6f}",
                 f"${costo_total:.6f}"
             ])
-        print(f"\n[COSTOS] Registro guardado en CSV. (Banco: {banco}) | Costo de operación: ${costo_total:.6f} USD", flush=True)
+        print(f"\n[COSTOS] Registro guardado en CSV. (Banco: {banco}) | Cliente {cliente_id} | Costo de operacion: ${costo_total:.6f} USD", flush=True)
     except Exception as e:
-        print(f"\n[COSTOS] ✗ Error al guardar el CSV de costos: {e}", flush=True)
+        print(f"\n[COSTOS] Error al guardar el CSV de costos: {e}", flush=True)
 
 # -----------------------------------------------------------------------------
 # MAIN PARA API ORQUESTADOR
 # -----------------------------------------------------------------------------
-def main_extraction_ia(ruta_pdf: str, directorio_salida: str) -> dict:
-    """Función de entrada compatible con el orquestador"""
+def main_extraction_ia(ruta_pdf: str, directorio_salida: str, cliente_id: int = 0) -> dict:
+    # Funcion de entrada compatible con el orquestador
+    global client, client_calibracion
+    client = genai.Client(api_key=API_KEY)
+    client_calibracion = genai.Client(api_key=API_KEY_CALIBRACION)
+
     print("-" * 80, flush=True)
     print("EXTRACTOR HÍBRIDO (GEMINI + QWEN) - INICIADO", flush=True)
     print("-" * 80, flush=True)
     
-    pdf_path = Path(ruta_pdf)
+    pdf_path_original = Path(ruta_pdf)
     
-    if not pdf_path.exists():
+    if not pdf_path_original.exists():
         return {"error": "Archivo no encontrado"}
         
     try:
+        id_proceso = str(uuid.uuid4())
+        directorio_aislado = pdf_path_original.parent / f"proceso_{id_proceso}"
+        directorio_aislado.mkdir(parents=True, exist_ok=True)
+        
+        pdf_path = directorio_aislado / pdf_path_original.name
+        shutil.copy(str(pdf_path_original), str(pdf_path))
+        
         # Configurar
         model_gemini = configurar_gemini()
         limpiar_archivos_api()
@@ -1712,7 +1853,7 @@ def main_extraction_ia(ruta_pdf: str, directorio_salida: str) -> dict:
             
         # Reiniciar estados
         global contador_transacciones
-        contador_transacciones = 0 
+        contador_transacciones = 0
 
         while not cola_transacciones.empty(): cola_transacciones.get()
         listas_finales["ingresos"], listas_finales["egresos"] = [], []
@@ -1747,10 +1888,13 @@ def main_extraction_ia(ruta_pdf: str, directorio_salida: str) -> dict:
         
         # Guardado final
         guardar_resultados_finales(directorio_salida, pdf_path)
-        guardar_registro_costos(pdf_path.stem)
+        guardar_registro_costos(pdf_path.stem, cliente_id=cliente_id)
         
-        if temp_dir.exists():
-            shutil.rmtree(temp_dir)
+        if str(pdf_path) in CACHE_LECTURA_PDF_RAM:
+            del CACHE_LECTURA_PDF_RAM[str(pdf_path)]
+            
+        if directorio_aislado.exists():
+            shutil.rmtree(directorio_aislado)
             
         return {"status": "ok", "mensaje": "Extracción Híbrida completada"}
     except Exception as e:

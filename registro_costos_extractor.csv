@@ -1,0 +1,7 @@
+Fecha_Hora,Cliente_ID,Banco,Empresa,Tiempo_Total_Procesamiento,Modelo_Coordenadas,Tiempo_Respuesta_Coord,Input_Tokens_Coord,Output_Tokens_Coord,Costo_Input_Coord,Costo_Output_Coord,Modelo_Transacciones,Tiempo_Respuesta_Trans,Input_Tokens_Trans,Output_Tokens_Trans,Costo_Input_Trans,Costo_Output_Trans,Costo_Total_Operacion
+2026-06-06 14:03:13,0,Banamex,INMOVITUR SA DE CV,384.39 s,gemini-3.1-pro-preview,71.60 s,5869,3275,$0.002935,$0.009825,gemini-3.1-pro-preview,218.56 s,25300,12001,$0.012650,$0.036003,$0.061413
+2026-06-06 14:20:30,0,BBVA,ENDLESS INNOVATION TECHNOLOGIES SA DE CV,383.86 s,gemini-3.1-pro-preview,83.04 s,5979,3058,$0.002989,$0.009174,gemini-3.1-pro-preview,219.49 s,16902,10634,$0.008451,$0.031902,$0.052517
+2026-06-06 14:47:59,0,BBVA,ENDLESS INNOVATION TECHNOLOGIES SA DE CV,695.98 s,gemini-3.1-pro-preview,74.26 s,5979,3569,$0.002989,$0.010707,gemini-3.1-pro-preview,118.49 s,15816,8340,$0.007908,$0.025020,$0.046624
+2026-06-06 15:07:55,0,BBVA,ENDLESS INNOVATION TECHNOLOGIES SA DE CV,362.23 s,gemini-3.1-pro-preview,137.21 s,5979,4290,$0.002989,$0.012870,gemini-3.1-pro-preview,200.14 s,15800,9007,$0.007900,$0.027021,$0.050780
+2026-06-06 15:30:38,0,BBVA,ENDLESS INNOVATION TECHNOLOGIES SA DE CV,431.16 s,gemini-3.1-pro-preview,73.94 s,5979,1217,$0.002989,$0.003651,gemini-3.1-pro-preview,225.09 s,18004,13168,$0.009002,$0.039504,$0.055147
+2026-06-06 15:59:36,0,BBVA,ENDLESS INNOVATION TECHNOLOGIES SA DE CV,815.57 s,gemini-3.1-pro-preview,121.97 s,5979,5558,$0.002989,$0.016674,gemini-3.1-pro-preview,174.35 s,18020,12098,$0.009010,$0.036294,$0.064967

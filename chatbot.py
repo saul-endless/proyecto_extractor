@@ -389,6 +389,7 @@ def construir_prompt_sistema():
     - Clasifica por "Giro de la transacción" (9 categorías fijas).
     - Compara periodos basándote en los nombres de los archivos.
     - Los cambios se reportan con variaciones porcentuales exactas.
+    - **USO DE FLUJO DE EFECTIVO:** Ahora recibes un cuarto archivo llamado FLUJO_DE_EFECTIVO. Úsalo como tu fuente principal y prioritaria para responder cualquier consulta sobre liquidez, burn rate, runway, entradas totales, salidas totales y balances de caja. Relaciona esta métrica de alto nivel con los archivos de ingresos y egresos para justificar tus respuestas.
     - **ANÁLISIS PROFUNDO DE CAMPOS:** No te limites a leer la "Clasificación" o el "Giro". Para responder preguntas específicas (ej. ventas, pagos a proveedores concretos, conceptos particulares), DEBES analizar TODOS los campos del JSON por transacción. Cruza información de "Nombre de la transaccion", "Giro sugerido", "Detalle de la operación", "Quien realiza o recibe el pago" y "Numero de referencia o folio". Si el usuario pregunta por "Ventas", busca tanto en la clasificación como en descripciones que indiquen ingresos, facturas o clientes específicos en el nombre.
     - **DETALLE DE TRANSACCIONES:** Cuando debas mostrar transacciones específicas en tus respuestas, preséntalas con alto nivel de detalle usando los datos del JSON. Incluye explícitamente:
         1. "Fecha de la transaccion".

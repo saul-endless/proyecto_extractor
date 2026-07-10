@@ -4,3 +4,5 @@ output/
 input/
 registro_costos_*.csv
 __pycache__/
+clave_ia.pem
+credenciales_drive.json

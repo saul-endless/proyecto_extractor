@@ -641,6 +641,12 @@ DESCRIPCIÓN:
     de red Fortinet que soporta los envíos SMS. Permite detectar problemas de
     conectividad que puedan explicar fallos en campañas.
 
+    Los datos que se muestran aquí son métricas reales del dispositivo FortiGate
+    del cliente: uso de procesador, estado del enlace de internet, ancho de banda
+    consumido, disponibilidad del servicio, latencia de red y pérdida de paquetes.
+    Estos datos se consultan desde la base de datos y se pueden analizar por
+    periodos de tiempo específicos.
+
 FILTROS DISPONIBLES:
     Opcional : Desde (fecha, formato dd/mm/yyyy)
     Opcional : Hasta  (fecha, formato dd/mm/yyyy)
@@ -648,41 +654,126 @@ FILTROS DISPONIBLES:
     Opcional : Días    (dropdown — elegir últimos N días)
     Opcional : Semanas (dropdown — elegir últimas N semanas)
     Opcional : Meses   (dropdown — elegir últimos N meses)
-    Opcional : Seleccionar servidor (dropdown con los servidores disponibles)
+    Opcional : Seleccionar servidor (dropdown con los sitios FortiGate del cliente)
     Botón    : "Buscar" para aplicar los filtros
 
-    También existe la etiqueta "Datos recientes desde" con los selectores
-    de Horas/Días/Semanas/Meses para ver los últimos N períodos sin necesidad
-    de especificar fechas exactas.
-
-GRÁFICAS MOSTRADAS (4 en total):
+GRÁFICAS MOSTRADAS (6 en total):
     1. Uso de CPU
-       - Eje Y: porcentaje (0 a 100%)
-       - Eje X: horas del día
-       - Muestra qué tan cargado está el procesador del servidor
+       Porcentaje de uso del procesador del dispositivo FortiGate.
+       Un valor alto sostenido (mayor al 80%) puede indicar sobrecarga.
 
     2. Estado del enlace
-       - Eje Y: porcentaje (0 a 100%)
-       - Eje X: horas del día
-       - Muestra la disponibilidad y calidad de la conexión de red
+       Disponibilidad y calidad de la conexión de red principal.
+       Un valor bajo indica problemas de conectividad que pueden causar
+       fallos masivos en campañas SMS.
 
-    3. Consumo de ancho de banda
-       - Eje Y: porcentaje (0 a 100%)
-       - Eje X: horas del día
-       - Muestra el tráfico de datos que pasa por la red
+    3. Consumo de ancho de banda (Subida y Bajada en Mbps)
+       Tráfico de datos que pasa por el dispositivo en cada dirección.
+       Picos inusuales pueden indicar tráfico no autorizado.
 
     4. Disponibilidad (Uptime)
-       - Eje Y: porcentaje (0 a 100%)
-       - Eje X: horas del día
-       - Muestra el porcentaje del tiempo que el servidor estuvo en línea
+       Porcentaje del tiempo que el dispositivo estuvo en línea.
+       Caídas de uptime en el horario de una campaña explican mensajes fallidos.
+
+    5. Latencia (ms)
+       Tiempo de respuesta de la red en milisegundos.
+       Valores altos indican lentitud en la conexión.
+
+    6. Pérdida de paquetes (%)
+       Porcentaje de datos que no llegaron a su destino.
+       Valores mayores al 5% son señal de problemas graves en la red.
+
+PATRONES DE USO DE INTERNET — QUÉ ANALIZAR:
+    Cuando el usuario pregunta por "patrones de uso de internet" o "comportamiento
+    de la red", se refiere a identificar en los datos históricos del Reporte de
+    Conexión cosas como:
+    - Horarios de mayor tráfico (picos de ancho de banda)
+    - Periodos de alta latencia o pérdida de paquetes
+    - Momentos donde el CPU estuvo sobrecargado
+    - Caídas de disponibilidad (uptime al 0%)
+    - Correlación entre caídas de red y fallos en campañas SMS
+
+    Todos estos datos están almacenados en la base de datos y se pueden
+    consultar para el cliente y el servidor (site) que tiene registrado.
+
+SITIOS FORTINET (SERVIDORES):
+    Cada cliente puede tener uno o varios dispositivos FortiGate registrados,
+    llamados "sitios". En el dropdown "Seleccionar servidor" aparece el nombre
+    del sitio (por ejemplo: "SANTA FE LIFESTYLE VENTAS (CUERNAVACA)").
+    Cada sitio tiene sus propias métricas independientes almacenadas.
 
 NOTAS PARA EL AGENTE:
-    - Este módulo es para el canal Fortinet, no para el canal SMS directamente.
-    - Si un usuario reporta fallas masivas en envíos, revisar este módulo para
-      ver si hubo caídas de uptime o picos de CPU en el mismo horario.
-    - Caídas del "Estado del enlace" por debajo del 80% en el momento de
-      una campaña explican mensajes fallidos masivos.
+    - Este módulo muestra datos reales de la red del cliente, no del portal SMS.
+    - Si un usuario pregunta por patrones, consumo, comportamiento o estadísticas
+      de su red o internet, este es el módulo correcto y los datos SÍ están
+      disponibles en el sistema.
+    - Si hay caídas del "Estado del enlace" por debajo del 80% en el momento de
+      una campaña, eso explica mensajes fallidos masivos.
     - Este módulo es de solo lectura, no permite hacer ninguna acción.
+
+================================================================================
+19B. MONITOREO DE RED — NOTIFICACIONES DE ACCESO (ALERTAS)
+================================================================================
+
+RUTA DE ACCESO: Sidebar → Monitorización → (sección Alertas o Notificaciones)
+
+DESCRIPCIÓN:
+    Muestra los eventos de seguridad y alertas de tráfico detectados por el
+    dispositivo FortiGate del cliente. Cada fila es un evento de acceso
+    registrado por el firewall.
+
+FILTROS DISPONIBLES:
+    - Sitio    : seleccionar el dispositivo FortiGate
+    - Desde    : fecha de inicio del rango
+    - Hasta    : fecha de fin del rango
+    Botón "Buscar" para aplicar los filtros.
+
+COLUMNAS DE LA TABLA:
+    - Fecha               : fecha del evento
+    - Fuente              : IP o dispositivo de origen del tráfico
+    - Dispositivo         : identificador del dispositivo involucrado
+    - Destino             : IP o destino al que se intentó acceder
+    - Nombre de la aplicación : nombre de la app o protocolo detectado (ej: "forward")
+
+NOTAS PARA EL AGENTE:
+    - Estas alertas son generadas automáticamente por el FortiGate.
+    - Si el usuario pregunta por "notificaciones", "alertas de red", "eventos
+      de seguridad" o "accesos detectados", este es el módulo correspondiente.
+    - Los datos están almacenados en la base de datos y son consultables.
+
+================================================================================
+19C. MONITOREO DE RED — SITIOS BLACK LIST (FORTINET)
+================================================================================
+
+RUTA DE ACCESO: Sidebar → Monitorización → (sección Sitios Black List o Blacklist)
+
+DESCRIPCIÓN:
+    Permite gestionar la lista de URLs, dominios o IPs bloqueados en el
+    dispositivo FortiGate del cliente. Los sitios en esta lista son bloqueados
+    a nivel de firewall para todos los usuarios de la red del cliente.
+
+    Esta blacklist es DIFERENTE a la blacklist de contactos SMS. La blacklist
+    de Fortinet bloquea sitios web e IPs en la red. La blacklist de contactos
+    bloquea números de teléfono para envíos SMS.
+
+FUNCIONES DISPONIBLES:
+    - Ver lista de sitios bloqueados
+    - Agregar URL o IP a la blacklist
+    - Eliminar un sitio de la blacklist
+
+AGREGAR A BLACKLIST FORTINET:
+    Campo obligatorio : URL o IP a bloquear (ej: "http://www.sitio-malicioso.com")
+    Botón             : "Agregar a Blacklist"
+
+COLUMNAS DE LA TABLA:
+    - Sitios   : URL o IP bloqueada
+    - Acciones : opción para eliminar el sitio de la lista
+
+NOTAS PARA EL AGENTE:
+    - Si el usuario pregunta por "sitios bloqueados", "bloquear una página web",
+      "blacklist de Fortinet" o "bloquear IP en la red", este es el módulo.
+    - Es distinto a la Black List de números telefónicos del módulo SMS.
+    - Los cambios se aplican al dispositivo FortiGate real del cliente.
 
 ================================================================================
 20. LEVANTAR TICKETS

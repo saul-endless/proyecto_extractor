@@ -151,14 +151,10 @@ descripción dice 'ABONO' o 'TRANSFERENCIA'.
      - "Total Abonos/Depósitos" (El monto total que dice el banco en el resumen).
      - "Total Cargos/Retiros" (El monto total que dice el banco en el resumen).
 
-3. **FILTRADO DE DUPLICADOS (NUEVA REGLA DE ORO):**
-   - **SOLO** extrae transacciones de la sección principal llamada "DETALLE DE OPERACIONES", "MOVIMIENTOS" o "ESTADO DE CUENTA".
-   - **IGNORA COMPLETAMENTE** tablas secundarias o anexas que suelen estar al final del PDF, tales como:
-     - "Domiciliación Banamex" (o similar).
-     - "Resumen de Cheques Girados".
-     - "Movimientos por Concepto".
-     - "Detalle de Inversiones".
-   - **RAZÓN:** Estas tablas repiten transacciones que ya aparecieron en el detalle principal. Si las extraes, duplicarás los montos. Extrae CADA transacción UNA SOLA VEZ del listado cronológico principal.
+3. **FILTRO ESTRICTO DE TABLAS (KILL SWITCH PARA ACTINVER Y OTROS):**
+   - **TABLA PERMITIDA:** ÚNICAMENTE puedes extraer filas que estén físicamente bajo el título "DETALLE DE MOVIMIENTOS DE LA CUENTA ACTINVER (CUENTA EJE)" o la tabla principal de movimientos ("ESTADO DE CUENTA", "DETALLE DE OPERACIONES").
+   - **ZONA PROHIBIDA (PARADA INMEDIATA):** En el momento en que leas el título "DETALLE DE MOVIMIENTOS DEL MES DEL CONTRATO MONEDA NACIONAL", "INVERSIONES" o "RESUMEN DE CHEQUES", **TIENES ESTRICTAMENTE PROHIBIDO EXTRAER FILAS DE AHÍ**.
+   - **FILTRO DE CONCEPTOS (ACTINVER):** Tienes PROHIBIDO extraer filas cuya descripción contenga "REPORTO", "VTO. REPORTOS", "COMPRA DIRECTA DE REPORTOS" o "CETES". Si ves esas palabras, sáltate la fila. Extraerlas causará un fallo matemático masivo en la auditoría.
 
 4. **TRANSACCIONES (DETALLE - ANALISIS VISUAL DE COLUMNAS AVANZADO):**
    - **Nombre de la transaccion:** Copia LITERAL, incluyendo RFCs, referencias y códigos. NO simplifiques. Si la descripción ocupa varias líneas, concaténalas en una sola cadena.
@@ -171,6 +167,7 @@ descripción dice 'ABONO' o 'TRANSFERENCIA'.
      - **PASO 1 - UBICAR ENCABEZADOS:** Identifica en qué página está la tabla de movimientos y localiza los encabezados de columnas. Generalmente verás algo como:
        - Columna Izquierda: "CARGOS" / "RETIROS" / "DÉBITOS"
        - Columna Derecha: "ABONOS" / "DEPÓSITOS" / "CRÉDITOS"
+       - NOTA ESPECIAL: Si en la tabla existe una columna llamada "Operación" que dice literalmente "Cargo" o "Abono" fila por fila, usa esa indicación directa para clasificar, ignorando la posición visual.
      
      - **PASO 2 - ANÁLISIS DE POSICIÓN HORIZONTAL DEL MONTO:**
        Para CADA transacción:
@@ -894,6 +891,13 @@ Usa esta información para ubicarte en la primera página (contexto visual). NO 
                     
                     desc_norm = "".join(e for e in desc_raw.lower() if e.isalnum())
                     
+                    # --- KILL SWITCH PYTHON ---
+                    # Si el LLM fue terco y extrajo tabla de inversiones, las eliminamos aquí mismo.
+                    es_inversion_actinver = any(palabra in desc_norm for palabra in ["reporto", "cetes", "vtoreporto", "compradirecta"])
+                    if es_inversion_actinver:
+                        continue # Salta esta fila y la destruye silenciosamente
+                    # -------------------------------------------------------------------
+                    
                     # Incrementar contador para cada transacción procesada
                     contador_transacciones += 1
                     huella = f"{fecha}|{monto}|{desc_norm}|TX{contador_transacciones}"
@@ -941,6 +945,18 @@ Usa esta información para ubicarte en la primera página (contexto visual). NO 
 
         if not exito_bloque:
             print(f" ✗ Se agotaron los intentos para el bloque {idx_bloque+1}.", flush=True)
+
+        # Borra las imágenes PNG del bloque ya procesado para liberar disco inmediatamente
+        try:
+            if bloque_actual and bloque_actual.get("rutas_imagenes"):
+                for ruta_img in bloque_actual["rutas_imagenes"]:
+                    if ruta_img.exists():
+                        ruta_img.unlink()
+                carpeta_bloque = bloque_actual["rutas_imagenes"][0].parent
+                if carpeta_bloque.exists() and not any(carpeta_bloque.iterdir()):
+                    carpeta_bloque.rmdir()
+        except Exception:
+            pass
 
         cola_imagenes.task_done()
 
@@ -1739,6 +1755,21 @@ def main():
         # Guardar
         guardar_resultados_finales(DIR_OUTPUT, archivo)
         guardar_registro_costos(archivo.stem, cliente_id=0)
+        
+        # Borra la carpeta de imágenes temporales del proceso local
+        temp_chunks_local = archivo.parent / "temp_chunks"
+        try:
+            if temp_chunks_local.exists():
+                shutil.rmtree(temp_chunks_local)
+        except Exception:
+            pass
+        
+        # Borra el PDF de EXT_INPUT una vez procesado
+        try:
+            if archivo.exists():
+                archivo.unlink()
+        except Exception:
+            pass
         
         time.sleep(2)
 
